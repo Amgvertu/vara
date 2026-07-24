@@ -1,0 +1,86 @@
+spring:
+  application:
+    name: varamy
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:vara_my}
+    username: ${DB_USER:vara}
+    password: ${DB_PASSWORD:vara}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+      dialect: org.hibernate.dialect.PostgreSQLDialect
+      jdbc:
+        batch_size: 20
+      format_sql: true
+    show-sql: false
+
+  flyway:
+    enabled: false
+
+server:
+  port: ${SERVER_PORT:8081}
+  error:
+    include-message: always
+    include-binding-errors: always
+
+jwt:
+  secret: ${JWT_SECRET:mySecretKeyForJWTTokenGenerationMustBeAtLeast32CharactersLong}
+  access-token-expiration: 1800000 # 30 минут
+  refresh-token-expiration: 604800000 # 7 дней
+
+logging:
+  level:
+    info.prorabka.varamy: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+    org.hibernate.type.descriptor.sql: TRACE
+    org.springframework.orm.jpa: DEBUG
+    org.springframework.transaction: DEBUG
+
+file:
+  upload-dir: ${UPLOAD_DIR:uploads}
+
+app:
+  #base-url: ${APP_BASE_URL:http://localhost:8081}
+  cors:
+    allowed-origins:
+      - "*"
+    allowed-methods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    allowed-headers:
+      - "*"
+    exposed-headers:
+      - Authorization
+    allow-credentials: true
+    max-age: 3600
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    config-url: /v3/api-docs/swagger-config
+    url: /v3/api-docs
+    enabled: true
+    operationsSorter: method
+    tagsSorter: alpha
+    display-request-duration: true
+    try-it-out-enabled: true
+    persist-authorization: true
+    disable-swagger-default-url: true
+  packages-to-scan: info.prorabka.varamy.controller
+  paths-to-match: /**
+
+debug: true

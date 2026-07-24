@@ -1,0 +1,167 @@
+package info.prorabka.varamy.config;
+
+import info.prorabka.varamy.security.JwtAuthenticationFilter;
+import info.prorabka.varamy.security.UserDetailsServiceImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import info.prorabka.varamy.dto.response.ApiResponse;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.io.IOException;
+import java.util.Arrays;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+@RequiredArgsConstructor
+public class SecurityConfig {
+
+    private final UserDetailsServiceImpl userDetailsService;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ObjectMapper objectMapper;
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public DaoAuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
+        authProvider.setUserDetailsService(userDetailsService);
+        authProvider.setPasswordEncoder(passwordEncoder());
+        return authProvider;
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(Arrays.asList(
+                "http://katok.pro",
+                "https://katok.pro",
+                "http://www.katok.pro",
+                "https://www.katok.pro",
+                "http://soberi.info",
+                "https://soberi.info",
+                "http://www.soberi.info",
+                "https://www.soberi.info",
+                "http://varatut.ru",
+                "https://varatut.ru",
+                "http://www.varatut.ru",
+                "https://www.varatut.ru",
+                "http://localhost:5500",
+                "http://127.0.0.1:5500",
+                "http://192.168.0.70:8081",
+                "http://92.125.255.63:8081"
+        ));
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
+        configuration.setAllowedHeaders(Arrays.asList("*"));
+        configuration.setExposedHeaders(Arrays.asList("Authorization", "Content-Type"));
+        configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+                .csrf(AbstractHttpConfigurer::disable)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))  // ВКЛЮЧАЕМ CORS!
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(
+                                "/api/auth/**",
+                                "/error",
+                                "/api/locations/**",
+                                "/api/ads/**",
+                                "/api/ads/all/**",
+                                "/api/rinks/**",
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/webjars/**",
+                                "/swagger-resources/**",
+                                "/configuration/**",
+                                "/ws/**",
+                                "/api/feedback",
+                                "/api/agreements/**",
+                                "/api/advertisements/active",
+                                "/api/files/**",
+                                "/api/test/**"
+                        ).permitAll()
+                        .requestMatchers("/api/profile/me").authenticated()
+                        .requestMatchers("/api/profile/**").permitAll()
+                        // Реклама – все методы, кроме активных, доступны только ADMIN и ADVERT
+                        .requestMatchers(HttpMethod.POST, "/api/advertisements").hasAnyRole("ADMIN", "ADVERT")
+                        .requestMatchers(HttpMethod.GET, "/api/advertisements").hasAnyRole("ADMIN", "ADVERT")       // список
+                        .requestMatchers(HttpMethod.GET, "/api/advertisements/{id}").hasAnyRole("ADMIN", "ADVERT") // одна
+                        .requestMatchers(HttpMethod.PUT, "/api/advertisements/{id}").hasAnyRole("ADMIN", "ADVERT")
+                        .requestMatchers(HttpMethod.PATCH, "/api/advertisements/{id}/status").hasAnyRole("ADMIN", "ADVERT")
+                        .requestMatchers(HttpMethod.DELETE, "/api/advertisements/{id}").hasAnyRole("ADMIN", "ADVERT")
+                        .requestMatchers("/api/advertisements/upload-image").hasAnyRole("ADMIN", "ADVERT")
+                        .requestMatchers("/api/advertisements/statistics").hasAnyRole("ADMIN")  // только ADMIN
+                        .requestMatchers("/api/user/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/admin/rinks").hasAnyRole("ADMIN", "MODERATOR")
+                        .requestMatchers("/api/admin/ads").hasAnyRole("ADMIN", "MODERATOR")
+                        .requestMatchers("/api/admin/messages/**").hasAnyRole("ADMIN", "MODERATOR")
+                        .requestMatchers("/api/admin/teams").hasAnyRole("ADMIN", "MODERATOR")
+                        .requestMatchers("/api/admin/users/search").hasAnyRole("ADMIN", "MODERATOR")
+                        .requestMatchers("/api/moderation/**").hasAnyRole("MODERATOR", "ADMIN")
+                        .requestMatchers("/api/user/messages/**").authenticated()
+                        .anyRequest().authenticated()
+                )
+                .authenticationProvider(authenticationProvider())
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .exceptionHandling(exceptions -> exceptions
+                        .authenticationEntryPoint((request, response, authException) -> {
+                            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                            response.setContentType("application/json");
+                            response.setCharacterEncoding("UTF-8");
+                            response.getWriter().write("{\"success\":false,\"message\":\"Неавторизован\"}");
+                        })
+                        .accessDeniedHandler((request, response, accessDeniedException) -> {
+                            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                            response.setContentType("application/json");
+                            response.setCharacterEncoding("UTF-8");
+                            response.getWriter().write("{\"success\":false,\"message\":\"Доступ запрещен\"}");
+                        })
+                );
+
+        return http.build();
+    }
+
+    private void sendErrorResponse(HttpServletResponse response, int status, String message) throws IOException {
+        response.setStatus(status);
+        response.setContentType("application/json");
+        response.setCharacterEncoding("UTF-8");
+        ApiResponse<Void> apiResponse = ApiResponse.error(message);
+        response.getWriter().write(objectMapper.writeValueAsString(apiResponse));
+    }
+}
