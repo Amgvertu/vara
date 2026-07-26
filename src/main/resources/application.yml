@@ -82,7 +82,7 @@ sms:
   gateway:
     enabled: true   # должно быть true
     user-id: "a42abfcf-8f42-4dac-8f6d-95e8c8d756da"  # ID пользователя SMS_GATEWAY
-  mock-mode: false
+  mock-mode: true
   provider:
     enabled: false                     # включаем HTTP-провайдера
     url: https://sms.ru/sms/send
