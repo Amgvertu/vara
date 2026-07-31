@@ -333,7 +333,8 @@ public class SecurityConfig {
                                 "/api/feedback",
                                 "/api/agreements/**",
                                 "/api/advertisements/active",
-                                "/api/files/**"
+                                "/api/files/**",
+                                "/api/test/**"
                         ).permitAll()
                         .requestMatchers("/api/profile/me").authenticated()
                         .requestMatchers("/api/profile/**").permitAll()

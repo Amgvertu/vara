@@ -76,7 +76,7 @@ logging:
     info.prorabka.varamy.service.NotificationService: DEBUG
 
 file:
-  upload-dir: uploads-staging   # абсолютный путь на сервере
+  upload-dir: uploads   # абсолютный путь на сервере
 
 sms:
   gateway:
@@ -136,7 +136,7 @@ app:
     cleanup:
       archive-months: 5  # Количество месяцев хранения архивных объявлений
       archive-cron: "0 0 3 * * ?"  # Ежедневно в 3 часа ночи
-  base-url: https://varamy.online/api-staging   # внешний URL с префиксом /api2
+  base-url: https://varamy.online/api-staging   # внешний URL с префиксом /api-staging
 
 springdoc:
   api-docs:
