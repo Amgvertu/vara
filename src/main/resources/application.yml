@@ -74,6 +74,7 @@ logging:
     org.springframework.messaging.simp: DEBUG
     org.springframework.web.socket: DEBUG
     info.prorabka.varamy.service.NotificationService: DEBUG
+    info.prorabka.varamy.service.FileStorageService: DEBUG
 
 file:
   upload-dir: uploads   # абсолютный путь на сервере
