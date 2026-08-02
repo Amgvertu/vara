@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -509,5 +510,56 @@ public class NotificationService {
         String time = startTime.format(timeFormatter);
 
         return String.format("«%s», %s, %s, %s", typeDescription, rinkName, date, time);
+    }
+
+    @Transactional
+    public void setupDefaultNotifications(UUID userId) {
+        // 1. Создаём или обновляем настройки – включаем уведомления о новых объявлениях
+        NotificationSettings settings = settingsRepository.findByUserId(userId)
+                .orElseGet(() -> createDefaultSettings(userId));
+
+        // Включаем уведомления о новых объявлениях в городе
+        settings.setNotifyNewAdsInCity(true);
+        settings.setUpdatedAt(LocalDateTime.now());
+        settingsRepository.save(settings);
+
+        log.debug("Включены уведомления о новых объявлениях для пользователя {}", userId);
+
+        // 2. Добавляем подписки на все типы объявлений
+        addDefaultSubscriptions(userId);
+    }
+
+    public void addDefaultSubscriptions(UUID userId) {
+        List<int[]> pairs = Arrays.asList(
+                new int[]{1, 1}, new int[]{1, 2},
+                new int[]{2, 1}, new int[]{2, 2},
+                new int[]{3, 1}, new int[]{3, 2},
+                new int[]{4, 1}, new int[]{4, 2}, new int[]{4, 3}, new int[]{4, 4}
+        );
+
+        for (int[] pair : pairs) {
+            try {
+                // Используем существующий метод, но он выбрасывает исключение, если подписка уже есть
+                AddSubscriptionRequest request = new AddSubscriptionRequest();
+                request.setType(pair[0]);
+                request.setSubType(pair[1]);
+
+                // Проверяем, существует ли уже подписка
+                UserNotificationSubscription.SubscriptionId id =
+                        new UserNotificationSubscription.SubscriptionId(userId, pair[0], pair[1]);
+                if (!subscriptionRepository.existsById(id)) {
+                    User user = userService.getUserById(userId);
+                    UserNotificationSubscription subscription = new UserNotificationSubscription();
+                    subscription.setId(id);
+                    subscription.setUser(user);
+                    subscriptionRepository.save(subscription);
+                }
+            } catch (Exception e) {
+                log.warn("Не удалось добавить подписку по умолчанию для пользователя {}: type={}, subType={}",
+                        userId, pair[0], pair[1], e);
+            }
+        }
+
+        log.info("Добавлены подписки по умолчанию для пользователя {}", userId);
     }
 }

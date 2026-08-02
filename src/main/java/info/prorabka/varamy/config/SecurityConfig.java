@@ -112,8 +112,7 @@ public class SecurityConfig {
                                 "/api/feedback",
                                 "/api/agreements/**",
                                 "/api/advertisements/active",
-                                "/api/files/**",
-                                "/api/test/**"
+                                "/api/files/**"
                         ).permitAll()
                         .requestMatchers("/api/profile/me").authenticated()
                         .requestMatchers("/api/profile/**").permitAll()

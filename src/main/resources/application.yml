@@ -48,7 +48,7 @@ spring:
     enabled: false
 
 server:
-  port: ${SERVER_PORT:8082}
+  port: ${SERVER_PORT:8081}
   error:
     include-message: always
     include-binding-errors: always
@@ -82,9 +82,10 @@ sms:
   gateway:
     enabled: true   # должно быть true
     user-id: "a42abfcf-8f42-4dac-8f6d-95e8c8d756da"  # ID пользователя SMS_GATEWAY
-  mock-mode: true
+  mock-mode: false
   provider:
-    enabled: false                     # включаем HTTP-провайдера
+    enabled: false
+    # включаем HTTP-провайдера
     url: https://sms.ru/sms/send
     api_id: "1E60E0CB-37D0-39A2-4073-8EF4C36D55D1"         # защищённая переменная окружения
     sender: "katok.pro"        # опционально
@@ -115,10 +116,8 @@ app:
       - "https://www.soberi.info"
       - "http://localhost:5500"
       - "http://127.0.0.1:5500"
-      - "http://192.168.0.70:8082"
-      - "http://92.125.255.63:8082"
-      - "https://192.168.0.70:8082"
-      - "https://92.125.255.63:8082"
+      - "http://192.168.0.70:8081"
+      - "http://92.125.255.63:8081"
     allowed-methods:
       - GET
       - POST
@@ -136,7 +135,7 @@ app:
     cleanup:
       archive-months: 5  # Количество месяцев хранения архивных объявлений
       archive-cron: "0 0 3 * * ?"  # Ежедневно в 3 часа ночи
-  base-url: https://varamy.online/api-staging   # внешний URL с префиксом /api-staging
+  base-url: https://varamy.online/api   # внешний URL с префиксом /api2
 
 springdoc:
   api-docs:

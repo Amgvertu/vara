@@ -66,52 +66,46 @@ public class VerificationService {
         verificationCode.setUsed(false);
         verificationCodeRepository.save(verificationCode);
 
-        // ----- ОТПРАВКА SMS -----
-        boolean sent = false;
+        // ----- ОТПРАВКА ЧЕРЕЗ SMS-ШЛЮЗ С ТРЕМЯ ПОПЫТКАМИ -----
+        if (!gatewayEnabled) {
+            throw new RuntimeException("SMS-шлюз отключён. Невозможно отправить сообщение.");
+        }
 
-        // 1. Пытаемся отправить через WebSocket-шлюз
-        if (gatewayEnabled) {
-            String requestId = smsGatewayService.sendSmsViaGateway(phone, code, purpose.name());
-            if (requestId != null) {
-                log.info("SMS отправлено через шлюз, requestId: {}", requestId);
-                sent = true;
-            } else {
-                log.warn("Шлюз не ответил, пробуем разбудить...");
-                // Первая попытка уже отправила FCM wake-up, ждём 3 секунды
-                try {
-                    Thread.sleep(3000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                // Повторная попытка
+        int maxAttempts = 3;
+        long delayMs = 3000;
+        String requestId = null;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            log.info("Попытка отправки SMS через шлюз: {} из {}, телефон: {}, код: {}", attempt, maxAttempts, phone, code);
+            try {
                 requestId = smsGatewayService.sendSmsViaGateway(phone, code, purpose.name());
                 if (requestId != null) {
-                    log.info("SMS отправлено через шлюз после пробуждения, requestId: {}", requestId);
-                    sent = true;
+                    log.info("SMS успешно отправлено через шлюз, requestId: {}", requestId);
+                    break;
                 } else {
-                    log.warn("Шлюз всё ещё не отвечает, пробуем HTTP-провайдера");
+                    log.warn("Попытка {} отправки через шлюз вернула null", attempt);
+                }
+            } catch (Exception e) {
+                log.error("Ошибка при попытке отправки через шлюз, попытка {}", attempt, e);
+            }
+
+            if (attempt < maxAttempts) {
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Прервано ожидание между попытками отправки SMS", e);
                 }
             }
         }
 
-        // 2. Если шлюз не сработал, пробуем HTTP-провайдера (SMS.ru)
-        if (!sent && smsRuService.sendSms(phone, code, purpose.name())) {
-            log.info("SMS отправлено через SMS.ru");
-            sent = true;
+        if (requestId == null) {
+            log.error("Не удалось отправить SMS после {} попыток для телефона {}", maxAttempts, phone);
+            throw new RuntimeException("Не удалось отправить SMS. Попробуйте позже.");
         }
 
-        // 3. Если ни один из способов не помог, используем mock (если включён) или выбрасываем ошибку
-        if (!sent) {
-            if (mockMode) {
-                log.info("Все способы отправки не удались, используется MOCK. Код: {}", code);
-                smsService.sendVerificationCode(phone, code, purpose.name());
-                sent = true;
-            } else {
-                throw new RuntimeException("Не удалось отправить SMS ни через шлюз, ни через HTTP-провайдера");
-            }
-        }
-
-        return code; // Возвращаем код для mock-режима
+        // Возвращаем код (может понадобиться для тестов, но в продакшене не используется)
+        return code;
     }
 
     @Transactional
