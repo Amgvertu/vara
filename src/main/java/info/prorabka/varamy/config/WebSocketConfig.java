@@ -34,8 +34,13 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         log.info("Регистрация STOMP эндпоинта /ws");
         registry.addEndpoint("/ws")
-                .setAllowedOrigins("*")   // в production замените на конкретные домены
-                .addInterceptors(new JwtHandshakeInterceptor());  // без параметров
+                .setAllowedOrigins(
+                        "https://varamy.online",
+                        "https://www.varamy.online",
+                        "https://katok.pro",
+                        "https://www.katok.pro"
+                )
+                .addInterceptors(new JwtHandshakeInterceptor());
     }
 
     @Override

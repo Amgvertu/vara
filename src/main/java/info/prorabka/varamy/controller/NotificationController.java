@@ -7,6 +7,7 @@ import info.prorabka.varamy.dto.response.NotificationResponse;
 import info.prorabka.varamy.dto.response.NotificationSettingsResponse;
 import info.prorabka.varamy.security.SecurityUser;
 import info.prorabka.varamy.service.NotificationService;
+import info.prorabka.varamy.service.PushService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -38,6 +39,7 @@ public class NotificationController {
     private final NotificationService notificationService;
     private final SimpMessagingTemplate messagingTemplate;
     private final SimpUserRegistry userRegistry;  // для отладки
+    private final List<PushService> pushServices;
 
     // ========== НАСТРОЙКИ ==========
 
@@ -148,6 +150,29 @@ public class NotificationController {
                 .map(s -> s.getId())
                 .collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(sessions));
+    }
+
+    // ========== ТЕСТОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ PUSH ==========
+
+    @PostMapping("/test-push")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "ТЕСТ: Отправить тестовое push-уведомление")
+    public ResponseEntity<ApiResponse<Void>> testPush(
+            @AuthenticationPrincipal SecurityUser currentUser,
+            @RequestParam String title,
+            @RequestParam String body) {
+        log.info("🔵 Тестовый push для пользователя {}: title={}, body={}", currentUser.getId(), title, body);
+
+        for (PushService pushService : pushServices) {
+            try {
+                pushService.sendNotification(currentUser.getId(), title, body);
+                log.info("✅ Отправлено через {}", pushService.getClass().getSimpleName());
+            } catch (Exception e) {
+                log.error("❌ Ошибка через {}: {}", pushService.getClass().getSimpleName(), e.getMessage(), e);
+            }
+        }
+
+        return ResponseEntity.ok(ApiResponse.success("Тестовое уведомление отправлено", null));
     }
 
 }

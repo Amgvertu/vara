@@ -333,8 +333,7 @@ public class SecurityConfig {
                                 "/api/feedback",
                                 "/api/agreements/**",
                                 "/api/advertisements/active",
-                                "/api/files/**",
-                                "/api/test/**"
+                                "/api/files/**"
                         ).permitAll()
                         .requestMatchers("/api/profile/me").authenticated()
                         .requestMatchers("/api/profile/**").permitAll()
@@ -8223,6 +8222,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -8711,6 +8711,57 @@ public class NotificationService {
         String time = startTime.format(timeFormatter);
 
         return String.format("«%s», %s, %s, %s", typeDescription, rinkName, date, time);
+    }
+
+    @Transactional
+    public void setupDefaultNotifications(UUID userId) {
+        // 1. Создаём или обновляем настройки – включаем уведомления о новых объявлениях
+        NotificationSettings settings = settingsRepository.findByUserId(userId)
+                .orElseGet(() -> createDefaultSettings(userId));
+
+        // Включаем уведомления о новых объявлениях в городе
+        settings.setNotifyNewAdsInCity(true);
+        settings.setUpdatedAt(LocalDateTime.now());
+        settingsRepository.save(settings);
+
+        log.debug("Включены уведомления о новых объявлениях для пользователя {}", userId);
+
+        // 2. Добавляем подписки на все типы объявлений
+        addDefaultSubscriptions(userId);
+    }
+
+    public void addDefaultSubscriptions(UUID userId) {
+        List<int[]> pairs = Arrays.asList(
+                new int[]{1, 1}, new int[]{1, 2},
+                new int[]{2, 1}, new int[]{2, 2},
+                new int[]{3, 1}, new int[]{3, 2},
+                new int[]{4, 1}, new int[]{4, 2}, new int[]{4, 3}, new int[]{4, 4}
+        );
+
+        for (int[] pair : pairs) {
+            try {
+                // Используем существующий метод, но он выбрасывает исключение, если подписка уже есть
+                AddSubscriptionRequest request = new AddSubscriptionRequest();
+                request.setType(pair[0]);
+                request.setSubType(pair[1]);
+
+                // Проверяем, существует ли уже подписка
+                UserNotificationSubscription.SubscriptionId id =
+                        new UserNotificationSubscription.SubscriptionId(userId, pair[0], pair[1]);
+                if (!subscriptionRepository.existsById(id)) {
+                    User user = userService.getUserById(userId);
+                    UserNotificationSubscription subscription = new UserNotificationSubscription();
+                    subscription.setId(id);
+                    subscription.setUser(user);
+                    subscriptionRepository.save(subscription);
+                }
+            } catch (Exception e) {
+                log.warn("Не удалось добавить подписку по умолчанию для пользователя {}: type={}, subType={}",
+                        userId, pair[0], pair[1], e);
+            }
+        }
+
+        log.info("Добавлены подписки по умолчанию для пользователя {}", userId);
     }
 }
 
@@ -10162,52 +10213,46 @@ public class VerificationService {
         verificationCode.setUsed(false);
         verificationCodeRepository.save(verificationCode);
 
-        // ----- ОТПРАВКА SMS -----
-        boolean sent = false;
+        // ----- ОТПРАВКА ЧЕРЕЗ SMS-ШЛЮЗ С ТРЕМЯ ПОПЫТКАМИ -----
+        if (!gatewayEnabled) {
+            throw new RuntimeException("SMS-шлюз отключён. Невозможно отправить сообщение.");
+        }
 
-        // 1. Пытаемся отправить через WebSocket-шлюз
-        if (gatewayEnabled) {
-            String requestId = smsGatewayService.sendSmsViaGateway(phone, code, purpose.name());
-            if (requestId != null) {
-                log.info("SMS отправлено через шлюз, requestId: {}", requestId);
-                sent = true;
-            } else {
-                log.warn("Шлюз не ответил, пробуем разбудить...");
-                // Первая попытка уже отправила FCM wake-up, ждём 3 секунды
-                try {
-                    Thread.sleep(3000);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                // Повторная попытка
+        int maxAttempts = 3;
+        long delayMs = 3000;
+        String requestId = null;
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            log.info("Попытка отправки SMS через шлюз: {} из {}, телефон: {}, код: {}", attempt, maxAttempts, phone, code);
+            try {
                 requestId = smsGatewayService.sendSmsViaGateway(phone, code, purpose.name());
                 if (requestId != null) {
-                    log.info("SMS отправлено через шлюз после пробуждения, requestId: {}", requestId);
-                    sent = true;
+                    log.info("SMS успешно отправлено через шлюз, requestId: {}", requestId);
+                    break;
                 } else {
-                    log.warn("Шлюз всё ещё не отвечает, пробуем HTTP-провайдера");
+                    log.warn("Попытка {} отправки через шлюз вернула null", attempt);
+                }
+            } catch (Exception e) {
+                log.error("Ошибка при попытке отправки через шлюз, попытка {}", attempt, e);
+            }
+
+            if (attempt < maxAttempts) {
+                try {
+                    Thread.sleep(delayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Прервано ожидание между попытками отправки SMS", e);
                 }
             }
         }
 
-        // 2. Если шлюз не сработал, пробуем HTTP-провайдера (SMS.ru)
-        if (!sent && smsRuService.sendSms(phone, code, purpose.name())) {
-            log.info("SMS отправлено через SMS.ru");
-            sent = true;
+        if (requestId == null) {
+            log.error("Не удалось отправить SMS после {} попыток для телефона {}", maxAttempts, phone);
+            throw new RuntimeException("Не удалось отправить SMS. Попробуйте позже.");
         }
 
-        // 3. Если ни один из способов не помог, используем mock (если включён) или выбрасываем ошибку
-        if (!sent) {
-            if (mockMode) {
-                log.info("Все способы отправки не удались, используется MOCK. Код: {}", code);
-                smsService.sendVerificationCode(phone, code, purpose.name());
-                sent = true;
-            } else {
-                throw new RuntimeException("Не удалось отправить SMS ни через шлюз, ни через HTTP-провайдера");
-            }
-        }
-
-        return code; // Возвращаем код для mock-режима
+        // Возвращаем код (может понадобиться для тестов, но в продакшене не используется)
+        return code;
     }
 
     @Transactional
