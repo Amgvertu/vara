@@ -109,6 +109,7 @@ public class SecurityConfig {
                                 "/swagger-resources/**",
                                 "/configuration/**",
                                 "/ws/**",
+                                "/ws-staging/**",
                                 "/api/feedback",
                                 "/api/agreements/**",
                                 "/api/advertisements/active",

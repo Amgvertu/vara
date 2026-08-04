@@ -103,6 +103,7 @@ public class AuthChannelInterceptor implements ChannelInterceptor {
                     log.warn("❌ STOMP CONNECT rejected: invalid token");
                 }
             }
+            log.warn("❌ STOMP CONNECT rejected: token={}, valid={}", token, token != null ? jwtService.validateToken(token) : "null");
             return null; // отклоняем соединение
         }
         return message;

@@ -562,4 +562,6 @@ public class NotificationService {
 
         log.info("Добавлены подписки по умолчанию для пользователя {}", userId);
     }
+
+    
 }

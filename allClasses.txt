@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -31,12 +32,15 @@ public class AuthChannelInterceptor implements ChannelInterceptor {
         StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
         if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
 
+            log.info("🔵 STOMP CONNECT received");
+
             String token = null;
 
             // 1. Пробуем получить токен из заголовка Authorization (новый способ)
             String authHeader = accessor.getFirstNativeHeader("Authorization");
             if (authHeader != null && authHeader.startsWith("Bearer ")) {
                 token = authHeader.substring(7);
+                log.info("🔑 Token extracted from Authorization header");
             }
 
             // 2. Если не нашли – пробуем старый заголовок "token"
@@ -44,10 +48,40 @@ public class AuthChannelInterceptor implements ChannelInterceptor {
                 List<String> tokens = accessor.getNativeHeader("token");
                 if (tokens != null && !tokens.isEmpty()) {
                     token = tokens.get(0);
+                    log.info("🔑 Token extracted from 'token' header");
                 }
             }
 
-            // 3. Валидируем токен и проверяем статус пользователя
+            // 3. Если всё ещё null — пробуем получить из параметров подключения (для SockJS)
+            if (token == null) {
+                // Получаем параметры запроса из заголовка
+                String queryString = accessor.getFirstNativeHeader("query-string");
+                if (queryString != null && queryString.contains("token=")) {
+                    String[] params = queryString.split("&");
+                    for (String param : params) {
+                        if (param.startsWith("token=")) {
+                            token = param.substring(6);
+                            log.info("🔑 Token extracted from query string");
+                            break;
+                        }
+                    }
+                }
+
+                // Проверяем также заголовок Authorization через nativeMessage
+                if (token == null) {
+                    // Используем то, что уже есть в accessor
+                    // Попробуем получить из параметров соединения
+                    Map<String, Object> sessionAttributes = accessor.getSessionAttributes();
+                    if (sessionAttributes != null && sessionAttributes.containsKey("token")) {
+                        token = (String) sessionAttributes.get("token");
+                        log.info("🔑 Token extracted from session attributes");
+                    }
+                }
+            }
+
+            log.info("🔑 Token present: {}", token != null ? "YES (length=" + token.length() + ")" : "NO");
+
+            // 4. Валидируем токен и проверяем статус пользователя
             if (token != null && jwtService.validateToken(token)) {
                 try {
                     String userId = jwtService.getUserIdFromToken(token);
@@ -55,16 +89,21 @@ public class AuthChannelInterceptor implements ChannelInterceptor {
                     if (user != null && user.getStatus() == User.UserStatus.ACTIVE) {
                         Principal principal = () -> userId;
                         accessor.setUser(principal);
-                        log.info("STOMP CONNECT authenticated user: {}", userId);
+                        log.info("✅ STOMP CONNECT authenticated user: {}", userId);
                         return message;
                     } else {
-                        log.warn("STOMP CONNECT rejected: user {} is not active", userId);
+                        log.warn("❌ STOMP CONNECT rejected: user {} is not active", userId);
                     }
                 } catch (Exception e) {
-                    log.error("Error during STOMP authentication", e);
+                    log.error("❌ Error during STOMP authentication", e);
+                }
+            } else {
+                if (token == null) {
+                    log.warn("❌ STOMP CONNECT rejected: no token provided");
+                } else {
+                    log.warn("❌ STOMP CONNECT rejected: invalid token");
                 }
             }
-            log.warn("STOMP CONNECT rejected: invalid or missing token");
             return null; // отклоняем соединение
         }
         return message;
@@ -78,21 +117,41 @@ import com.google.auth.oauth2.GoogleCredentials;
 import com.google.firebase.FirebaseApp;
 import com.google.firebase.FirebaseOptions;
 import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 
+import java.io.File;
 import java.io.IOException;
 
+@Slf4j
 @Configuration
 public class FirebaseConfig {
     @PostConstruct
     public void initialize() throws IOException {
+        log.info("🔍 Проверяем наличие firebase-adminsdk.json");
+        log.info("📁 Текущая папка: {}", new File(".").getAbsolutePath());
+
         ClassPathResource resource = new ClassPathResource("firebase-adminsdk.json");
+
+        if (!resource.exists()) {
+            log.error("❌ firebase-adminsdk.json НЕ НАЙДЕН!");
+            throw new IOException("Файл firebase-adminsdk.json не найден");
+        }
+
+        log.info("✅ firebase-adminsdk.json найден");
+
         FirebaseOptions options = FirebaseOptions.builder()
                 .setCredentials(GoogleCredentials.fromStream(resource.getInputStream()))
+                .setConnectTimeout(5000)
+                .setReadTimeout(5000)
                 .build();
+
         if (FirebaseApp.getApps().isEmpty()) {
             FirebaseApp.initializeApp(options);
+            log.info("✅ Firebase успешно инициализирован");
+        } else {
+            log.info("ℹ️ Firebase уже инициализирован");
         }
     }
 }
@@ -330,6 +389,7 @@ public class SecurityConfig {
                                 "/swagger-resources/**",
                                 "/configuration/**",
                                 "/ws/**",
+                                "/ws-staging/**",
                                 "/api/feedback",
                                 "/api/agreements/**",
                                 "/api/advertisements/active",
@@ -441,10 +501,15 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        log.info("Регистрация STOMP эндпоинта /ws");
-        registry.addEndpoint("/ws")
-                .setAllowedOrigins("*")   // в production замените на конкретные домены
-                .addInterceptors(new JwtHandshakeInterceptor());  // без параметров
+        log.info("Регистрация STOMP эндпоинта /ws-staging");
+        registry.addEndpoint("/ws-staging")
+                .setAllowedOrigins(
+                        "https://varamy.online",
+                        "https://www.varamy.online",
+                        "https://katok.pro",
+                        "https://www.katok.pro"
+                )
+                .addInterceptors(new JwtHandshakeInterceptor());
     }
 
     @Override
@@ -1529,6 +1594,7 @@ import info.prorabka.varamy.dto.response.NotificationResponse;
 import info.prorabka.varamy.dto.response.NotificationSettingsResponse;
 import info.prorabka.varamy.security.SecurityUser;
 import info.prorabka.varamy.service.NotificationService;
+import info.prorabka.varamy.service.PushService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -1560,6 +1626,7 @@ public class NotificationController {
     private final NotificationService notificationService;
     private final SimpMessagingTemplate messagingTemplate;
     private final SimpUserRegistry userRegistry;  // для отладки
+    private final List<PushService> pushServices;
 
     // ========== НАСТРОЙКИ ==========
 
@@ -1671,6 +1738,30 @@ public class NotificationController {
                 .collect(Collectors.toList());
         return ResponseEntity.ok(ApiResponse.success(sessions));
     }
+
+    // ========== ТЕСТОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ PUSH ==========
+
+    @PostMapping("/test-push")
+    @PreAuthorize("isAuthenticated()")
+    @Operation(summary = "ТЕСТ: Отправить тестовое push-уведомление")
+    public ResponseEntity<ApiResponse<Void>> testPush(
+            @AuthenticationPrincipal SecurityUser currentUser,
+            @RequestParam String title,
+            @RequestParam String body) {
+        log.info("🔵 Тестовый push для пользователя {}: title={}, body={}", currentUser.getId(), title, body);
+
+        for (PushService pushService : pushServices) {
+            try {
+                pushService.sendNotification(currentUser.getId(), title, body);
+                log.info("✅ Отправлено через {}", pushService.getClass().getSimpleName());
+            } catch (Exception e) {
+                log.error("❌ Ошибка через {}: {}", pushService.getClass().getSimpleName(), e.getMessage(), e);
+            }
+        }
+
+        return ResponseEntity.ok(ApiResponse.success("Тестовое уведомление отправлено", null));
+    }
+
 
 }
 
@@ -8763,6 +8854,8 @@ public class NotificationService {
 
         log.info("Добавлены подписки по умолчанию для пользователя {}", userId);
     }
+
+    
 }
 
 ======================= info/prorabka/varamy/service/ProfileService.java =======================

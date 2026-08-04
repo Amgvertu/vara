@@ -32,8 +32,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        log.info("Регистрация STOMP эндпоинта /ws");
-        registry.addEndpoint("/ws")
+        log.info("Регистрация STOMP эндпоинта /ws-staging");
+        registry.addEndpoint("/ws-staging")
                 .setAllowedOrigins(
                         "https://varamy.online",
                         "https://www.varamy.online",
