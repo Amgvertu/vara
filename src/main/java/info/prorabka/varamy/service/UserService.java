@@ -43,6 +43,9 @@ public class UserService {
     private final AdminMessageRepository adminMessageRepository;
     private final UserNotificationSubscriptionRepository userNotificationSubscriptionRepository;
     private final UserStatRepository userStatRepository;
+    private final RuStoreTokenRepository ruStoreTokenRepository;
+    private final HmsTokenRepository hmsTokenRepository;
+
 
 
     public User getUserById(UUID id) {
@@ -120,6 +123,11 @@ public class UserService {
 
             // 3. Удаляем FCM-токены
             fcmTokenRepository.deleteByUserId(user.getId());
+
+            // 3.1 Удаляем HMS-токены (если есть)
+            hmsTokenRepository.deleteByUserId(user.getId());
+            // 3.2 Удаляем RuStore-токены (добавить)
+            ruStoreTokenRepository.deleteByUserId(user.getId());
 
             // 4. Удаляем личные сообщения пользователя
             userMessageRepository.deleteByUserId(user.getId());

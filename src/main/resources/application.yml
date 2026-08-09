@@ -72,7 +72,7 @@ logging:
     com.google.firebase: DEBUG
 
 file:
-  upload-dir: uploads   # абсолютный путь на сервере
+  upload-dir: \uploads   # абсолютный путь на сервере
 
 sms:
   gateway:
@@ -88,12 +88,17 @@ sms:
 
 huawei:
   push:
-    app-id: ${HUAWEI_APP_ID:118382697}
-    client-secret: ${HUAWEI_CLIENT_SECRET:your_client_secret}
-    client-id: ${HUAWEI_CLIENT_ID:118382697}
+    app-id: 118382697
+    client-secret: d98c465711b362a315ca3d3b15bdcaec93e1342d93cc46ab4073ea012ba58de7
+    client-id: 118382697
     token-url: https://oauth-login.cloud.huawei.com/oauth2/v3/token
     push-url: https://push-api.cloud.huawei.com/v1/${huawei.push.app-id}/messages:send
 
+rustore:
+  push:
+    api-key: SvzKG7oosMgH2QlY9OE6yne2WyvXmnQ0dPwIIxup8UIW4KgNFeM9TPgUEJtkYchM
+    project-id: jl4uTL62lrP4Kx3GlhMfSMi7y6f6eY0d
+    url: https://push-cloud.vk.com/api/v1/messages
 
 verification:
   code:

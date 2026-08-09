@@ -9,6 +9,7 @@ import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -17,7 +18,7 @@ import java.util.UUID;
 public class SmsGatewayService {
 
     private final SimpMessagingTemplate messagingTemplate;
-    private final FcmService fcmService;           // <-- добавить
+    private final List<PushService> pushServices;           // <-- добавить
     private final SimpUserRegistry userRegistry;   // <-- добавить
 
     @Value("${sms.gateway.user-id:}")
@@ -61,16 +62,18 @@ public class SmsGatewayService {
                 return null;
             }
         } else {
-            // Сессии нет – отправляем FCM WAKE_UP
-            log.warn("No active WebSocket session for gateway user {}, sending FCM wake-up", gatewayUserId);
-            try {
-                fcmService.sendWakeUpNotification(UUID.fromString(gatewayUserId));
-                log.info("FCM wake-up sent to gateway user {}", gatewayUserId);
-                return null;
-            } catch (Exception e) {
-                log.error("Failed to send FCM wake-up", e);
-                return null;
+            // Сессии нет – отправляем пробуждение через все доступные push-каналы
+            log.warn("No active WebSocket session for gateway user {}, sending wake-up via all push services", gatewayUserId);
+            UUID userId = UUID.fromString(gatewayUserId);
+            for (PushService pushService : pushServices) {
+                try {
+                    pushService.sendWakeUpNotification(userId);
+                    log.info("Wake-up sent via {} to gateway user {}", pushService.getClass().getSimpleName(), gatewayUserId);
+                } catch (Exception e) {
+                    log.error("Failed to send wake-up via {}: {}", pushService.getClass().getSimpleName(), e.getMessage());
+                }
             }
+            return null;
         }
     }
 }
