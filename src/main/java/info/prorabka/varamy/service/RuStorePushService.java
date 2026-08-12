@@ -40,7 +40,7 @@ public class RuStorePushService implements PushService {
         }
         // RuStore не поддерживает data-сообщения, как FCM, поэтому используем обычное уведомление с "тишиной"
         for (String token : tokens) {
-            sendRuStorePush(token, null, null, "WAKE_UP");
+            sendRuStorePush(userId, token, null, null, "WAKE_UP");
         }
     }
 
@@ -52,17 +52,16 @@ public class RuStorePushService implements PushService {
             return;
         }
         for (String token : tokens) {
-            sendRuStorePush(token, title, body, "REAL");
+            sendRuStorePush(userId, token, title, body, "REAL");
         }
     }
 
-    private void sendRuStorePush(String token, String title, String body, String type) {
+    private void sendRuStorePush(UUID userId, String token, String title, String body, String type) {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.set("X-API-Key", apiKey);
 
-            // Формируем payload по документации VK Cloud Push
             var payload = new VkPushPayload();
             payload.setProjectId(projectId);
             payload.setToken(token);
@@ -73,11 +72,15 @@ public class RuStorePushService implements PushService {
             HttpEntity<String> request = new HttpEntity<>(objectMapper.writeValueAsString(payload), headers);
             ResponseEntity<String> response = restTemplate.exchange(pushUrl, HttpMethod.POST, request, String.class);
 
-            if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("RuStore push sent to token {}", token);
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                int statusCode = response.getStatusCode().value();
+                log.warn("RuStore push failed: status={}, body={}", statusCode, response.getBody());
+                if (statusCode == 400 || statusCode == 401) {
+                    tokenService.unregisterToken(userId, token);
+                    log.info("Деактивирован недействительный RuStore токен для пользователя {}", userId);
+                }
             } else {
-                log.warn("RuStore push failed: {}, body: {}", response.getStatusCode(), response.getBody());
-                // Если токен невалиден (400/401), деактивируем его (но у нас нет userId в этом контексте, можно игнорировать)
+                log.info("RuStore push успешно отправлен пользователю {}", userId);
             }
         } catch (Exception e) {
             log.error("Error sending RuStore push", e);

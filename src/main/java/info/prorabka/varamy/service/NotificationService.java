@@ -42,7 +42,7 @@ public class NotificationService {
     private final SimpUserRegistry userRegistry;   // для проверки активных сессий
     private final List<PushService> pushServices;
     private final Map<UUID, Long> lastFcmSentTime = new ConcurrentHashMap<>();
-    private static final long FCM_COOLDOWN_MS = 5 * 60 * 1000; // 5 минут (настройте под свои задачи)
+    private static final long FCM_COOLDOWN_MS = 30 * 60 * 1000; // 30 минут
     private final ResponseRepository responseRepository;
     private final ResponseMapper responseMapper;
     private final AdMapper adMapper;

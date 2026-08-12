@@ -75,7 +75,7 @@ public class HuaweiPushService implements PushService {
             return;
         }
         for (String token : tokens) {
-            sendHuaweiPush(token, null, null, "WAKE_UP");
+            sendHuaweiPush(userId, token, null, null, "WAKE_UP");
         }
     }
 
@@ -87,11 +87,11 @@ public class HuaweiPushService implements PushService {
             return;
         }
         for (String token : tokens) {
-            sendHuaweiPush(token, title, body, "REAL");
+            sendHuaweiPush(userId, token, title, body, "REAL");
         }
     }
 
-    private void sendHuaweiPush(String token, String title, String body, String type) {
+    private void sendHuaweiPush(UUID userId, String token, String title, String body, String type) {
         try {
             String accessToken = getAccessToken();
 
@@ -123,11 +123,21 @@ public class HuaweiPushService implements PushService {
             );
 
             if (response.getStatusCode() == HttpStatus.OK) {
-                log.info("Huawei push sent to token {}", token);
-            } else {
-                log.warn("Huawei push failed: {}, body: {}", response.getStatusCode(), response.getBody());
-                // Если токен недействителен, можно деактивировать, но у нас нет userId в этом контексте.
-                // Можно оставить как есть или доработать.
+                try {
+                    JsonNode jsonResponse = objectMapper.readTree(response.getBody());
+                    // Проверяем код ошибки Huawei
+                    if (jsonResponse.has("code") && jsonResponse.get("code").asInt() != 0) {
+                        int errorCode = jsonResponse.get("code").asInt();
+                        // 80100000 - недействительный токен (по документации Huawei)
+                        if (errorCode == 80100000) {
+                            hmsTokenService.unregisterToken(userId, token);
+                            log.info("Деактивирован недействительный HMS токен для пользователя {}", userId);
+                        }
+                        log.error("Huawei ошибка: code={}, message={}", errorCode, jsonResponse.get("msg"));
+                    }
+                } catch (Exception e) {
+                    log.error("Ошибка парсинга ответа Huawei", e);
+                }
             }
         } catch (Exception e) {
             log.error("Error sending Huawei push", e);
