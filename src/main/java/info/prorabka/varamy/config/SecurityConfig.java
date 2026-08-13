@@ -99,8 +99,9 @@ public class SecurityConfig {
                                 "/api/auth/**",
                                 "/error",
                                 "/api/locations/**",
-                                "/api/ads/**",
-                                "/api/ads/all/**",
+                                "/api/ads/all",                    // Только для публичного списка
+                                "/api/ads/all/**",                 // Только для публичного списка
+                                "/api/ads/check-duplicate",        // Проверка дубликатов
                                 "/api/rinks/**",
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
@@ -115,6 +116,8 @@ public class SecurityConfig {
                                 "/api/advertisements/active",
                                 "/api/files/**"
                         ).permitAll()
+                        // Следующие эндпоинты требуют аутентификации
+                        .requestMatchers("/api/ads/**").authenticated()  // Все остальные запросы к /api/ads требуют аутентификации
                         .requestMatchers("/api/profile/me").authenticated()
                         .requestMatchers("/api/profile/**").permitAll()
                         // Реклама – все методы, кроме активных, доступны только ADMIN и ADVERT

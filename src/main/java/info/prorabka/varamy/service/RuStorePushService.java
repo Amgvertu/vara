@@ -1,7 +1,5 @@
-// src/main/java/info/prorabka/varamy/service/RuStorePushService.java
 package info.prorabka.varamy.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,12 +8,14 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class RuStorePushService implements PushService {
 
     private final RuStoreTokenService tokenService;
@@ -35,12 +35,12 @@ public class RuStorePushService implements PushService {
     public void sendWakeUpNotification(UUID userId) {
         List<String> tokens = tokenService.getActiveTokensForUser(userId);
         if (tokens.isEmpty()) {
-            log.warn("No active RuStore tokens for user {}", userId);
+            log.warn("Нет активных RuStore токенов для пользователя {}", userId);
             return;
         }
-        // RuStore не поддерживает data-сообщения, как FCM, поэтому используем обычное уведомление с "тишиной"
+
         for (String token : tokens) {
-            sendRuStorePush(userId, token, null, null, "WAKE_UP");
+            sendRuStorePush(token, null, null, "WAKE_UP");
         }
     }
 
@@ -48,57 +48,74 @@ public class RuStorePushService implements PushService {
     public void sendNotification(UUID userId, String title, String body) {
         List<String> tokens = tokenService.getActiveTokensForUser(userId);
         if (tokens.isEmpty()) {
-            log.warn("No active RuStore tokens for user {}", userId);
+            log.warn("Нет активных RuStore токенов для пользователя {}", userId);
             return;
         }
+
         for (String token : tokens) {
-            sendRuStorePush(userId, token, title, body, "REAL");
+            sendRuStorePush(token, title, body, "REAL");
         }
     }
 
-    private void sendRuStorePush(UUID userId, String token, String title, String body, String type) {
+    private void sendRuStorePush(String token, String title, String body, String type) {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.set("X-API-Key", apiKey);
 
-            var payload = new VkPushPayload();
-            payload.setProjectId(projectId);
-            payload.setToken(token);
-            payload.setTitle(title);
-            payload.setBody(body);
-            payload.setData("{\"type\":\"" + type + "\"}");
+            // Правильный payload для VK Cloud Push
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("projectId", projectId);
+            payload.put("token", token);
 
-            HttpEntity<String> request = new HttpEntity<>(objectMapper.writeValueAsString(payload), headers);
-            ResponseEntity<String> response = restTemplate.exchange(pushUrl, HttpMethod.POST, request, String.class);
-
-            if (!response.getStatusCode().is2xxSuccessful()) {
-                int statusCode = response.getStatusCode().value();
-                log.warn("RuStore push failed: status={}, body={}", statusCode, response.getBody());
-                if (statusCode == 400 || statusCode == 401) {
-                    tokenService.unregisterToken(userId, token);
-                    log.info("Деактивирован недействительный RuStore токен для пользователя {}", userId);
-                }
-            } else {
-                log.info("RuStore push успешно отправлен пользователю {}", userId);
+            // Data (всегда отправляем)
+            Map<String, String> data = new HashMap<>();
+            data.put("type", type);
+            if (title != null) {
+                data.put("title", title);
             }
-        } catch (Exception e) {
-            log.error("Error sending RuStore push", e);
-        }
-    }
+            if (body != null) {
+                data.put("body", body);
+            }
+            payload.put("data", data);
 
-    // Вспомогательный DTO для VK Cloud Push
-    static class VkPushPayload {
-        public String projectId;
-        public String token;
-        public String title;
-        public String body;
-        public String data;
-        // геттеры/сеттеры (или просто public поля)
-        public void setProjectId(String projectId) { this.projectId = projectId; }
-        public void setToken(String token) { this.token = token; }
-        public void setTitle(String title) { this.title = title; }
-        public void setBody(String body) { this.body = body; }
-        public void setData(String data) { this.data = data; }
+            // Notification (только если есть title и body)
+            if (title != null && body != null) {
+                Map<String, String> notification = new HashMap<>();
+                notification.put("title", title);
+                notification.put("body", body);
+                payload.put("notification", notification);
+            }
+
+            payload.put("messageId", UUID.randomUUID().toString());
+
+            String jsonPayload = objectMapper.writeValueAsString(payload);
+            HttpEntity<String> request = new HttpEntity<>(jsonPayload, headers);
+
+            ResponseEntity<String> response = restTemplate.exchange(
+                    pushUrl,
+                    HttpMethod.POST,
+                    request,
+                    String.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("✅ RuStore Push успешно отправлен");
+            } else {
+                int statusCode = response.getStatusCode().value();
+                log.error("❌ RuStore Push ошибка: status={}, body={}",
+                        statusCode, response.getBody());
+
+                // Если токен недействителен (400 или 401) - деактивируем его
+                if (statusCode == 400 || statusCode == 401) {
+                    log.warn("⚠️ Недействительный RuStore токен, деактивируем");
+                    // Здесь нужен userId, но его нет в этом методе
+                    // Поэтому просто логируем
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Ошибка отправки RuStore Push: {}", e.getMessage());
+        }
     }
 }

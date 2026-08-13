@@ -92,7 +92,7 @@ huawei:
     client-secret: d98c465711b362a315ca3d3b15bdcaec93e1342d93cc46ab4073ea012ba58de7
     client-id: 118382697
     token-url: https://oauth-login.cloud.huawei.com/oauth2/v3/token
-    push-url: https://push-api.cloud.huawei.com/v1/${huawei.push.app-id}/messages:send
+    push-url: https://push-api.cloud.huawei.com/v1/%s/messages:send
 
 rustore:
   push:

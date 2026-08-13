@@ -11,16 +11,18 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
-@Slf4j
 public class HuaweiPushService implements PushService {
 
-    private final HuaweiPushProperties properties;
     private final HmsTokenService hmsTokenService;
+    private final HuaweiPushProperties properties;
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -59,11 +61,11 @@ public class HuaweiPushService implements PushService {
                 return cachedAccessToken;
             } else {
                 log.error("Failed to get Huawei access token: {}", response.getStatusCode());
-                throw new RuntimeException("Failed to get Huawei access token");
+                return null;
             }
         } catch (Exception e) {
             log.error("Error obtaining Huawei access token", e);
-            throw new RuntimeException("Error obtaining Huawei access token", e);
+            return null;
         }
     }
 
@@ -94,61 +96,80 @@ public class HuaweiPushService implements PushService {
     private void sendHuaweiPush(UUID userId, String token, String title, String body, String type) {
         try {
             String accessToken = getAccessToken();
+            if (accessToken == null) {
+                log.error("Cannot send Huawei push: no access token");
+                return;
+            }
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.setBearerAuth(accessToken);
 
-            StringBuilder payload = new StringBuilder();
-            payload.append("{");
-            payload.append("\"payload\": {");
-            payload.append("\"data\": \"").append(escapeJson("type=" + type)).append("\"");
-            if (title != null && body != null) {
-                payload.append(", \"notification\": {");
-                payload.append("\"title\": \"").append(escapeJson(title)).append("\",");
-                payload.append("\"body\": \"").append(escapeJson(body)).append("\"");
-                payload.append("}");
-            }
-            payload.append("},");
-            payload.append("\"token\": [\"").append(token).append("\"]");
-            payload.append("}");
+            // Формируем payload для Huawei Push API
+            Map<String, Object> payload = new HashMap<>();
+            Map<String, Object> message = new HashMap<>();
 
-            HttpEntity<String> request = new HttpEntity<>(payload.toString(), headers);
+            // Токены
+            message.put("token", new String[]{token});
+
+            // Data (всегда отправляем)
+            Map<String, String> data = new HashMap<>();
+            data.put("type", type);
+            if (title != null) data.put("title", title);
+            if (body != null) data.put("body", body);
+            message.put("data", data);
+
+            // Notification (только если есть title и body)
+            if (title != null && body != null) {
+                Map<String, String> notification = new HashMap<>();
+                notification.put("title", title);
+                notification.put("body", body);
+                notification.put("clickAction", "OPEN_APP");
+                message.put("notification", notification);
+            }
+
+            // Android config
+            Map<String, Object> androidConfig = new HashMap<>();
+            Map<String, Object> collapseKey = new HashMap<>();
+            collapseKey.put("key", "msg");
+            androidConfig.put("collapseKey", collapseKey);
+            message.put("android", androidConfig);
+
+            payload.put("message", message);
+
+            String jsonPayload = objectMapper.writeValueAsString(payload);
+
+            String pushUrl = String.format(properties.getPushUrl(), properties.getAppId());
+            HttpEntity<String> request = new HttpEntity<>(jsonPayload, headers);
 
             ResponseEntity<String> response = restTemplate.exchange(
-                    properties.getPushUrl(),
+                    pushUrl,
                     HttpMethod.POST,
                     request,
                     String.class
             );
 
-            if (response.getStatusCode() == HttpStatus.OK) {
-                try {
-                    JsonNode jsonResponse = objectMapper.readTree(response.getBody());
-                    // Проверяем код ошибки Huawei
-                    if (jsonResponse.has("code") && jsonResponse.get("code").asInt() != 0) {
-                        int errorCode = jsonResponse.get("code").asInt();
-                        // 80100000 - недействительный токен (по документации Huawei)
-                        if (errorCode == 80100000) {
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("✅ Huawei Push успешно отправлен пользователю {}", userId);
+            } else {
+                int statusCode = response.getStatusCode().value();
+                log.error("❌ Huawei Push ошибка: status={}, body={}", statusCode, response.getBody());
+
+                // 80100000 - недействительный токен (по документации Huawei)
+                if (statusCode == 400) {
+                    try {
+                        JsonNode json = objectMapper.readTree(response.getBody());
+                        if (json.has("code") && json.get("code").asInt() == 80100000) {
                             hmsTokenService.unregisterToken(userId, token);
                             log.info("Деактивирован недействительный HMS токен для пользователя {}", userId);
                         }
-                        log.error("Huawei ошибка: code={}, message={}", errorCode, jsonResponse.get("msg"));
+                    } catch (Exception e) {
+                        log.error("Ошибка парсинга ответа Huawei", e);
                     }
-                } catch (Exception e) {
-                    log.error("Ошибка парсинга ответа Huawei", e);
                 }
             }
         } catch (Exception e) {
-            log.error("Error sending Huawei push", e);
+            log.error("Ошибка отправки Huawei Push: {}", e.getMessage(), e);
         }
-    }
-
-    private String escapeJson(String s) {
-        return s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
     }
 }

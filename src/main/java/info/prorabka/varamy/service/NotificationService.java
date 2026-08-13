@@ -9,6 +9,7 @@ import info.prorabka.varamy.exception.ResourceNotFoundException;
 import info.prorabka.varamy.mapper.AdMapper;
 import info.prorabka.varamy.mapper.ResponseMapper;
 import info.prorabka.varamy.repository.*;
+import info.prorabka.varamy.service.NotificationRetryScheduler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -21,10 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -47,6 +45,10 @@ public class NotificationService {
     private final ResponseMapper responseMapper;
     private final AdMapper adMapper;
     private final AdRepository adRepository;
+    private final FcmTokenService fcmTokenService;
+    private final HmsTokenService hmsTokenService;
+    private final RuStoreTokenService ruStoreTokenService;
+    private final NotificationRetryScheduler retryScheduler;
 
     // ========== НАСТРОЙКИ ==========
 
@@ -142,7 +144,20 @@ public class NotificationService {
     public void createAndSendNotification(UUID userId, String type, String content, UUID relatedEntityId) {
         log.info(">>> Creating notification for user {}: type={}, content={}", userId, type, content);
 
-        // 1. Сохраняем уведомление в БД (ВСЕГДА, независимо от наличия сессии)
+        // 1. Получаем настройки пользователя
+        NotificationSettings settings = settingsRepository.findByUserId(userId)
+                .orElseGet(() -> createDefaultSettings(userId));
+
+        // 2. Проверяем, нужно ли отправлять уведомление для данного типа
+        boolean shouldSend = shouldSendNotification(type, settings);
+        if (!shouldSend) {
+            log.info("Уведомления типа {} отключены для пользователя {}", type, userId);
+            // Все равно сохраняем в БД, чтобы пользователь мог увидеть в истории
+            saveNotification(userId, type, content, relatedEntityId);
+            return;
+        }
+
+        // 3. Сохраняем уведомление в БД
         User user = userService.getUserById(userId);
         Notification notification = new Notification();
         notification.setUser(user);
@@ -154,42 +169,200 @@ public class NotificationService {
         notification = notificationRepository.save(notification);
         log.info("Notification saved to DB with id={}", notification.getId());
 
-        // 2. Проверяем наличие активной WebSocket-сессии
+        // 4. Проверяем наличие активной WebSocket-сессии
         SimpUser simpUser = userRegistry.getUser(userId.toString());
         boolean hasSession = (simpUser != null && simpUser.hasSessions());
 
         if (hasSession) {
-            // Сессия есть – отправляем уведомление через WebSocket немедленно
-            NotificationResponse response = toResponse(notification);
-            try {
-                messagingTemplate.convertAndSendToUser(
-                        userId.toString(),
-                        "/queue/notifications",
-                        response
-                );
-                log.info("WebSocket notification successfully sent to user {}", userId);
-            } catch (Exception e) {
-                log.error("Failed to send WebSocket notification to user {}: {}", userId, e.getMessage(), e);
-            }
+            // Сессия есть – отправляем через WebSocket немедленно
+            sendViaWebSocket(userId, notification);
         } else {
-            // Сессии нет – отправляем FCM "пробуждение" (с защитой от частых отправок)
-            log.info("No active WebSocket session for user {}, sending FCM wake-up", userId);
-
-            if (shouldSendFcm(userId)) {
-                for (PushService pushService : pushServices) {
-                    try {
-                        pushService.sendWakeUpNotification(userId);
-                    } catch (Exception e) {
-                        log.error("Ошибка отправки wake-up через {}: {}", pushService.getClass().getSimpleName(), e.getMessage());
-                    }
-                }
-                lastFcmSentTime.put(userId, System.currentTimeMillis());
-                log.info("FCM wake-up sent to user {}", userId);
-            } else {
-                log.debug("FCM wake-up already sent recently for user {}, skipping", userId);
-            }
-            // Уведомление сохранено в БД, клиент заберёт его через REST после пробуждения
+            // Сессии нет – проверяем наличие push-токенов и отправляем
+            sendViaPushIfHasTokens(userId, type, content, notification);
         }
+    }
+
+    /**
+     * Проверяет, нужно ли отправлять уведомление для данного типа
+     */
+    private boolean shouldSendNotification(String type, NotificationSettings settings) {
+        switch (type) {
+            case "RESPONSE":
+            case "RESPONSE_WITHDRAWN":
+                return settings.isNotifyOnResponseToMyAd();
+            case "RESPONSE_ACCEPTED":
+            case "RESPONSE_ACCEPTANCE_CANCELLED":
+            case "RESPONSE_REJECTED":
+                return settings.isNotifyOnMyResponseAccepted();
+            case "NEW_AD":
+                return settings.isNotifyNewAdsInCity();
+            case "AD_STATUS_CHANGED":
+            case "ADMIN_MESSAGE":
+                return true; // Всегда отправляем
+            default:
+                return true; // Для неизвестных типов отправляем
+        }
+    }
+
+    /**
+     * Сохраняет уведомление без отправки
+     */
+    private Long saveNotification(UUID userId, String type, String content, UUID relatedEntityId) {
+        User user = userService.getUserById(userId);
+        Notification notification = new Notification();
+        notification.setUser(user);
+        notification.setType(type);
+        notification.setContent(content);
+        notification.setRelatedEntityId(relatedEntityId);
+        notification.setRead(false);
+        notification.setCreatedAt(LocalDateTime.now());
+        notification = notificationRepository.save(notification);
+
+        log.info("📝 Уведомление сохранено в БД с id={}", notification.getId());
+        return notification.getId(); // Возвращаем Long ID уведомления
+    }
+
+    /**
+     * Отправляет уведомление через WebSocket
+     */
+    private void sendViaWebSocket(UUID userId, Notification notification) {
+        try {
+            NotificationResponse response = toResponse(notification);
+            messagingTemplate.convertAndSendToUser(
+                    userId.toString(),
+                    "/queue/notifications",
+                    response
+            );
+            log.info("✅ WebSocket notification sent to user {}", userId);
+        } catch (Exception e) {
+            log.error("❌ Failed to send WebSocket notification to user {}: {}", userId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Отправляет уведомление через push, если есть активные токены
+     */
+    private void sendViaPushIfHasTokens(UUID userId, String type, String content, Notification notification) {
+        // Проверяем, есть ли у пользователя активные токены
+        boolean hasAnyToken = checkUserHasAnyToken(userId);
+
+        if (!hasAnyToken) {
+            log.info("ℹ️ User {} has no push tokens, notification saved only in DB", userId);
+            return;
+        }
+
+        // Проверяем, не отправляли ли недавно (защита от спама)
+        if (!shouldSendPushNow(userId)) {
+            log.debug("⏳ Push already sent recently for user {}, skipping", userId);
+            return;
+        }
+
+        // Определяем заголовок и тело для push-уведомления
+        String title = getPushTitle(type);
+        String body = getPushBody(type, content);
+
+        // Отправляем через все доступные push-сервисы
+        int sentCount = 0;
+        for (PushService pushService : pushServices) {
+            try {
+                sendPushNotification(userId, type, content, notification.getRelatedEntityId(), notification.getId());
+                sentCount++;
+                log.info("✅ Push sent via {} to user {}", pushService.getClass().getSimpleName(), userId);
+            } catch (Exception e) {
+                log.error("❌ Error sending push via {} to user {}: {}",
+                        pushService.getClass().getSimpleName(), userId, e.getMessage());
+            }
+        }
+
+        if (sentCount > 0) {
+            lastFcmSentTime.put(userId, System.currentTimeMillis());
+            log.info("📱 Push notifications sent to user {} via {} services", userId, sentCount);
+        } else {
+            log.warn("⚠️ Failed to send push to user {} via all services", userId);
+        }
+    }
+
+    /**
+     * Проверяет наличие любого активного push-токена у пользователя
+     */
+    private boolean checkUserHasAnyToken(UUID userId) {
+        // Проверяем FCM
+        List<String> fcmTokens = fcmTokenService.getActiveTokensForUser(userId);
+        if (!fcmTokens.isEmpty()) {
+            log.debug("User {} has {} FCM tokens", userId, fcmTokens.size());
+            return true;
+        }
+
+        // Проверяем HMS
+        List<String> hmsTokens = hmsTokenService.getActiveTokensForUser(userId);
+        if (!hmsTokens.isEmpty()) {
+            log.debug("User {} has {} HMS tokens", userId, hmsTokens.size());
+            return true;
+        }
+
+        // Проверяем RuStore
+        List<String> ruStoreTokens = ruStoreTokenService.getActiveTokensForUser(userId);
+        if (!ruStoreTokens.isEmpty()) {
+            log.debug("User {} has {} RuStore tokens", userId, ruStoreTokens.size());
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Проверяет, можно ли отправлять push сейчас (защита от спама)
+     */
+    private boolean shouldSendPushNow(UUID userId) {
+        Long lastSent = lastFcmSentTime.get(userId);
+        if (lastSent == null) {
+            return true;
+        }
+        // Не чаще чем раз в 5 минут для одного пользователя
+        return System.currentTimeMillis() - lastSent > 5 * 60 * 1000;
+    }
+
+    /**
+     * Возвращает заголовок для push-уведомления в зависимости от типа
+     */
+    private String getPushTitle(String type) {
+        switch (type) {
+            case "RESPONSE":
+                return "Новый отклик";
+            case "RESPONSE_ACCEPTED":
+                return "Отклик принят 🎉";
+            case "RESPONSE_REJECTED":
+                return "Отклик отклонен";
+            case "RESPONSE_ACCEPTANCE_CANCELLED":
+                return "Отмена принятия";
+            case "RESPONSE_WITHDRAWN":
+                return "Отклик отозван";
+            case "NEW_AD":
+                return "Новое объявление 📢";
+            case "AD_STATUS_CHANGED":
+                return "Статус объявления изменен";
+            case "ADMIN_MESSAGE":
+                return "Сообщение от администратора";
+            default:
+                return "Новое уведомление";
+        }
+    }
+
+    /**
+     * Формирует тело push-уведомления
+     */
+    private String getPushBody(String type, String content) {
+        // Если content содержит текст - используем его
+        if (content != null && !content.isEmpty()) {
+            // Обрезаем длинные сообщения (ограничение push-сервисов ~ 200 символов)
+            if (content.length() > 180) {
+                return content.substring(0, 177) + "...";
+            }
+            return content;
+        }
+
+        // Если content пустой - используем заглушку
+        return "Новое уведомление в приложении";
     }
 
     private NotificationResponse toResponse(Notification n) {
@@ -561,6 +734,175 @@ public class NotificationService {
         }
 
         log.info("Добавлены подписки по умолчанию для пользователя {}", userId);
+    }
+    /**
+     * Получает количество активных push-токенов пользователя по платформам
+     */
+    public Map<String, Integer> getPushTokensCount(UUID userId) {
+        Map<String, Integer> result = new HashMap<>();
+        result.put("FCM", fcmTokenService.getActiveTokensForUser(userId).size());
+        result.put("HMS", hmsTokenService.getActiveTokensForUser(userId).size());
+        result.put("RuStore", ruStoreTokenService.getActiveTokensForUser(userId).size());
+        return result;
+    }
+
+    /**
+     * Отправляет тестовое push-уведомление пользователю (для отладки)
+     */
+    public void sendTestPush(UUID userId) {
+        String title = "🔔 Тестовое уведомление";
+        String body = "Если вы это видите, push-уведомления работают!";
+
+        for (PushService pushService : pushServices) {
+            try {
+                pushService.sendNotification(userId, title, body);
+                log.info("✅ Test push sent via {} to user {}",
+                        pushService.getClass().getSimpleName(), userId);
+            } catch (Exception e) {
+                log.error("❌ Failed to send test push via {}: {}",
+                        pushService.getClass().getSimpleName(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Повторная отправка уведомления (используется при ошибках)
+     */
+    @Transactional
+    public void resendNotification(Long notificationId) {
+        // Находим уведомление в БД
+        Notification notification = notificationRepository.findById(notificationId)
+                .orElseThrow(() -> new ResourceNotFoundException("Уведомление не найдено"));
+
+        UUID userId = notification.getUser().getId();
+        String type = notification.getType();
+        String content = notification.getContent();
+        UUID relatedEntityId = notification.getRelatedEntityId();
+
+        // Проверяем настройки пользователя
+        NotificationSettings settings = settingsRepository.findByUserId(userId)
+                .orElseGet(() -> createDefaultSettings(userId));
+
+        // Проверяем, нужно ли отправлять push
+        boolean shouldSendPush = shouldSendPushForType(type, settings);
+        if (!shouldSendPush) {
+            log.info("ℹ️ Уведомление {} не требует push-отправки", notificationId);
+            return;
+        }
+
+        // Проверяем наличие активной WebSocket-сессии
+        SimpUser simpUser = userRegistry.getUser(userId.toString());
+        boolean hasSession = (simpUser != null && simpUser.hasSessions());
+
+        // Если сессии нет - отправляем push
+        if (!hasSession) {
+            boolean hasAnyToken = hasAnyPushToken(userId);
+            if (hasAnyToken) {
+                sendPushNotification(userId, type, content, relatedEntityId, notificationId);
+                log.info("✅ Push повторно отправлен для уведомления {}", notificationId);
+            } else {
+                log.info("ℹ️ У пользователя {} нет push-токенов для повторной отправки", userId);
+            }
+        } else {
+            // Если сессия есть - отправляем через WebSocket
+            NotificationResponse response = toResponse(notification);
+            messagingTemplate.convertAndSendToUser(
+                    userId.toString(),
+                    "/queue/notifications",
+                    response
+            );
+            log.info("✅ WebSocket уведомление повторно отправлено пользователю {}", userId);
+        }
+    }
+
+    /**
+     * Проверка, нужно ли отправлять push для данного типа
+     */
+    private boolean shouldSendPushForType(String type, NotificationSettings settings) {
+        switch (type) {
+            case "RESPONSE":
+                return settings.isNotifyOnResponseToMyAd();
+            case "RESPONSE_ACCEPTED":
+                return settings.isNotifyOnMyResponseAccepted();
+            case "NEW_AD":
+                return settings.isNotifyNewAdsInCity();
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Проверка наличия любого push-токена у пользователя
+     */
+    private boolean hasAnyPushToken(UUID userId) {
+        for (PushService pushService : pushServices) {
+            if (pushService instanceof FcmPushService) {
+                if (!fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    return true;
+                }
+            } else if (pushService instanceof HuaweiPushService) {
+                if (!hmsTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    return true;
+                }
+            } else if (pushService instanceof RuStorePushService) {
+                if (!ruStoreTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Отправка push-уведомления через все доступные сервисы
+     */
+    private void sendPushNotification(UUID userId, String type, String content, UUID relatedEntityId, Long notificationId) {
+        String title = getNotificationTitle(type);
+        String body = content;
+
+        // Если title не определен, используем дефолтный
+        if (title == null) {
+            title = "Новое уведомление";
+        }
+
+        for (PushService pushService : pushServices) {
+            try {
+                pushService.sendNotification(userId, title, body);
+                log.info("📤 Push отправлен через {} для пользователя {}",
+                        pushService.getClass().getSimpleName(), userId);
+            } catch (Exception e) {
+                log.error("❌ Ошибка отправки push через {}: {}",
+                        pushService.getClass().getSimpleName(), e.getMessage());
+
+                // Запланировать повторную отправку (используем notificationId)
+                if (notificationId != null) {
+                    retryScheduler.scheduleRetry(notificationId);
+                }
+            }
+        }
+    }
+
+    /**
+     * Получение заголовка для уведомления по типу
+     */
+    private String getNotificationTitle(String type) {
+        if (type == null) return null;
+        switch (type) {
+            case "RESPONSE":
+                return "Новый отклик";
+            case "RESPONSE_ACCEPTED":
+                return "Отклик принят";
+            case "NEW_AD":
+                return "Новое объявление";
+            case "RESPONSE_REJECTED":
+                return "Отклик отклонен";
+            case "RESPONSE_WITHDRAWN":
+                return "Отклик отозван";
+            case "RESPONSE_ACCEPTANCE_CANCELLED":
+                return "Принятие отклика отменено";
+            default:
+                return "Новое уведомление";
+        }
     }
 
     

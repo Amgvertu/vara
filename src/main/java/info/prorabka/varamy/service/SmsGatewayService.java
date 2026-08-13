@@ -1,16 +1,24 @@
 package info.prorabka.varamy.service;
 
 import info.prorabka.varamy.dto.sms.SmsCommand;
+import info.prorabka.varamy.dto.sms.SmsResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
 
 @Service
 @RequiredArgsConstructor
@@ -20,6 +28,8 @@ public class SmsGatewayService {
     private final SimpMessagingTemplate messagingTemplate;
     private final List<PushService> pushServices;           // <-- добавить
     private final SimpUserRegistry userRegistry;   // <-- добавить
+    private final Map<String, CompletableFuture<Boolean>> pendingRequests = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
 
     @Value("${sms.gateway.user-id:}")
     private String gatewayUserId;
@@ -74,6 +84,50 @@ public class SmsGatewayService {
                 }
             }
             return null;
+        }
+    }
+
+    public CompletableFuture<Boolean> sendSmsViaGatewayAsync(String phone, String code, String purpose) {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        String requestId = UUID.randomUUID().toString();
+
+        // Сохраняем future в мапу
+        pendingRequests.put(requestId, future);
+
+        // Создаем команду для шлюза
+        SmsCommand command = new SmsCommand(requestId, phone, code, purpose);
+
+        // Отправляем через WebSocket
+        messagingTemplate.convertAndSendToUser(
+                gatewayUserId,
+                "/queue/sms-commands",
+                command
+        );
+
+        // Таймаут через 30 секунд
+        scheduler.schedule(() -> {
+            CompletableFuture<Boolean> pending = pendingRequests.remove(requestId);
+            if (pending != null && !pending.isDone()) {
+                pending.complete(false);
+                log.warn("Таймаут ожидания ответа от шлюза для requestId={}", requestId);
+            }
+        }, 30, TimeUnit.SECONDS);
+
+        return future;
+    }
+
+    /**
+     * Обработка ответа от шлюза
+     */
+    @MessageMapping("/sms-response")
+    public void handleSmsResponse(SmsResponse response) {
+        CompletableFuture<Boolean> future = pendingRequests.remove(response.getRequestId());
+        if (future != null) {
+            future.complete(response.isSuccess());
+            log.info("Получен ответ от шлюза: requestId={}, success={}",
+                    response.getRequestId(), response.isSuccess());
+        } else {
+            log.warn("Получен ответ от шлюза с неизвестным requestId={}", response.getRequestId());
         }
     }
 }
