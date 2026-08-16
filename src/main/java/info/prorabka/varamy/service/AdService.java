@@ -401,7 +401,7 @@ public class AdService {
 
         if (archivedCount > 0) {
             adRepository.saveAll(expiredAds);
-            log.info("Архивировано {} объявлений", archivedCount);
+            //log.info("Архивировано {} объявлений", archivedCount);
         }
     }
 
