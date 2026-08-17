@@ -1,6 +1,5 @@
 package info.prorabka.varamy.controller;
 
-import info.prorabka.varamy.dto.request.FcmTokenRequest;
 import info.prorabka.varamy.dto.response.ApiResponse;
 import info.prorabka.varamy.security.SecurityUser;
 import info.prorabka.varamy.service.FcmTokenService;
@@ -11,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import info.prorabka.varamy.dto.request.PushTokenRequest;
 
 @RestController
 @RequestMapping("/api/push")
@@ -24,14 +24,15 @@ public class PushController {
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<Void>> registerToken(
             @AuthenticationPrincipal SecurityUser currentUser,
-            @Valid @RequestBody FcmTokenRequest request,
-            @RequestParam String platform) { // "FCM" или "HMS"
+            @Valid @RequestBody PushTokenRequest request) {
+        String platform = request.getPlatform();
+        String token = request.getToken();
         if ("FCM".equalsIgnoreCase(platform)) {
-            fcmTokenService.registerToken(currentUser.getId(), request.getToken());
+            fcmTokenService.registerToken(currentUser.getId(), token);
         } else if ("HMS".equalsIgnoreCase(platform)) {
-            hmsTokenService.registerToken(currentUser.getId(), request.getToken());
+            hmsTokenService.registerToken(currentUser.getId(), token);
         } else if ("RUSTORE".equalsIgnoreCase(platform)) {
-            ruStoreTokenService.registerToken(currentUser.getId(), request.getToken());
+            ruStoreTokenService.registerToken(currentUser.getId(), token);
         } else {
             return ResponseEntity.badRequest().body(ApiResponse.error("Неизвестная платформа"));
         }
