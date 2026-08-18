@@ -99,7 +99,7 @@ rustore:
   push:
     api-key: SvzKG7oosMgH2QlY9OE6yne2WyvXmnQ0dPwIIxup8UIW4KgNFeM9TPgUEJtkYchM
     project-id: jl4uTL62lrP4Kx3GlhMfSMi7y6f6eY0d
-    url: https://push-cloud.vk.com/api/v1/messages
+    url: https://vkpns.rustore.ru/v1/projects/jl4uTL62lrP4Kx3GlhMfSMi7y6f6eY0d/messages:send
 
 verification:
   code:

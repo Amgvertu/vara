@@ -61,7 +61,7 @@ public class RuStorePushService implements PushService {
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("X-API-Key", apiKey);
+            headers.setBearerAuth(apiKey);
 
             // Правильный payload для VK Cloud Push
             Map<String, Object> payload = new HashMap<>();
