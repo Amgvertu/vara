@@ -59,16 +59,18 @@ public class RuStorePushService implements PushService {
 
     private void sendRuStorePush(String token, String title, String body, String type) {
         try {
+            // URL с projectId
+            String url = String.format("https://vkpns.rustore.ru/v1/projects/%s/messages:send", projectId);
+
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(apiKey);
+            headers.setBearerAuth(apiKey);  // Bearer-токен
 
-            // Правильный payload для VK Cloud Push
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("projectId", projectId);
-            payload.put("token", token);
+            // Формируем payload как в документации
+            Map<String, Object> message = new HashMap<>();
+            message.put("token", token);
 
-            // Data (всегда отправляем)
+            // Data
             Map<String, String> data = new HashMap<>();
             data.put("type", type);
             if (title != null) {
@@ -77,43 +79,33 @@ public class RuStorePushService implements PushService {
             if (body != null) {
                 data.put("body", body);
             }
-            payload.put("data", data);
+            message.put("data", data);
 
             // Notification (только если есть title и body)
             if (title != null && body != null) {
                 Map<String, String> notification = new HashMap<>();
                 notification.put("title", title);
                 notification.put("body", body);
-                payload.put("notification", notification);
+                message.put("notification", notification);
             }
 
-            payload.put("messageId", UUID.randomUUID().toString());
+            // Оборачиваем в "message"
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("message", message);
 
             String jsonPayload = objectMapper.writeValueAsString(payload);
             HttpEntity<String> request = new HttpEntity<>(jsonPayload, headers);
 
             ResponseEntity<String> response = restTemplate.exchange(
-                    pushUrl,
-                    HttpMethod.POST,
-                    request,
-                    String.class
+                    url, HttpMethod.POST, request, String.class
             );
 
             if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("✅ RuStore Push успешно отправлен");
+                log.info("✅ RuStore Push успешно отправлен: {}", response.getBody());
             } else {
-                int statusCode = response.getStatusCode().value();
                 log.error("❌ RuStore Push ошибка: status={}, body={}",
-                        statusCode, response.getBody());
-
-                // Если токен недействителен (400 или 401) - деактивируем его
-                if (statusCode == 400 || statusCode == 401) {
-                    log.warn("⚠️ Недействительный RuStore токен, деактивируем");
-                    // Здесь нужен userId, но его нет в этом методе
-                    // Поэтому просто логируем
-                }
+                        response.getStatusCode().value(), response.getBody());
             }
-
         } catch (Exception e) {
             log.error("❌ Ошибка отправки RuStore Push: {}", e.getMessage());
         }
