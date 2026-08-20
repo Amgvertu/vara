@@ -40,4 +40,12 @@ public class HmsTokenService {
                 .map(HmsToken::getToken)
                 .toList();
     }
+
+    @Transactional
+    public void deleteAllTokensForUser(UUID userId) {
+        hmsTokenRepository.deleteByUserId(userId);
+        log.info("🗑️ Удалены все HMS токены для пользователя {}", userId);
+    }
+
+
 }

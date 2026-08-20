@@ -43,4 +43,11 @@ public class FcmTokenService {
                 .map(FcmToken::getToken)
                 .toList();
     }
+
+    @Transactional
+    public void deleteAllTokensForUser(UUID userId) {
+        fcmTokenRepository.deleteByUserId(userId);
+        log.info("🗑️ Удалены все FCM токены для пользователя {}", userId);
+    }
+
 }

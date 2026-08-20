@@ -41,4 +41,10 @@ public class RuStoreTokenService {
                 .map(RuStoreToken::getToken)
                 .toList();
     }
+
+    @Transactional
+    public void deleteAllTokensForUser(UUID userId) {
+        tokenRepository.deleteByUserId(userId);
+        log.info("🗑️ Удалены все RuStore токены для пользователя {}", userId);
+    }
 }
