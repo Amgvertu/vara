@@ -176,6 +176,7 @@ public class NotificationService {
         if (hasSession) {
             // Сессия есть – отправляем через WebSocket немедленно
             sendViaWebSocket(userId, notification);
+            sendViaPushIfHasTokens(userId, type, content, notification);
         } else {
             // Сессии нет – проверяем наличие push-токенов и отправляем
             sendViaPushIfHasTokens(userId, type, content, notification);
