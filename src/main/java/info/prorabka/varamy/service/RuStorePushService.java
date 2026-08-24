@@ -116,33 +116,24 @@ public class RuStorePushService implements PushService {
         }
     }
 
-    private void sendRuStorePush(String token, String title, String body, String type) {
+    private void sendRuStorePush(String deviceToken, String title, String body, String type) {
         try {
-            // Получаем OAuth-токен
-            String accessToken = getAccessToken();
-            if (accessToken == null) {
-                log.error("❌ Не удалось получить OAuth-токен для RuStore");
-                return;
-            }
-
+            // Формируем URL с projectId
             String url = String.format("https://vkpns.rustore.ru/v1/projects/%s/messages:send", projectId);
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(accessToken); // Используем OAuth-токен!
+            headers.setBearerAuth(apiKey); // ← используем статический сервисный токен
 
-            // Формируем payload
             Map<String, Object> message = new HashMap<>();
-            message.put("token", token);
+            message.put("token", deviceToken);
 
-            // Data (всегда отправляем)
             Map<String, String> data = new HashMap<>();
             data.put("type", type);
             if (title != null) data.put("title", title);
             if (body != null) data.put("body", body);
             message.put("data", data);
 
-            // Notification (только если есть title и body)
             if (title != null && body != null) {
                 Map<String, String> notification = new HashMap<>();
                 notification.put("title", title);
@@ -165,12 +156,6 @@ public class RuStorePushService implements PushService {
             } else {
                 log.error("❌ RuStore Push ошибка: status={}, body={}",
                         response.getStatusCode().value(), response.getBody());
-
-                // Если токен недействителен - сбрасываем кеш
-                if (response.getStatusCode() == HttpStatus.UNAUTHORIZED) {
-                    cachedAccessToken = null;
-                    log.warn("🔄 OAuth-токен RuStore недействителен, сбрасываем кеш");
-                }
             }
         } catch (Exception e) {
             log.error("❌ Ошибка отправки RuStore Push: {}", e.getMessage(), e);
