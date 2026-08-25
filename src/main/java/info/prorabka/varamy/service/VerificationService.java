@@ -1,7 +1,8 @@
 package info.prorabka.varamy.service;
 
-import info.prorabka.varamy.dto.request.SendVerificationCodeRequest;
-import info.prorabka.varamy.dto.request.VerifyCodeRequest;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.CompletableFuture;
 import info.prorabka.varamy.entity.VerificationCode;
 import info.prorabka.varamy.exception.BadRequestException;
 import info.prorabka.varamy.repository.VerificationCodeRepository;
@@ -67,41 +68,24 @@ public class VerificationService {
         verificationCodeRepository.save(verificationCode);
 
         // ----- ОТПРАВКА ЧЕРЕЗ SMS-ШЛЮЗ С ТРЕМЯ ПОПЫТКАМИ -----
+        // ----- ОТПРАВКА ЧЕРЕЗ SMS-ШЛЮЗ С АСИНХРОННЫМ ОЖИДАНИЕМ -----
         if (!gatewayEnabled) {
             throw new RuntimeException("SMS-шлюз отключён. Невозможно отправить сообщение.");
         }
 
-        int maxAttempts = 3;
-        long delayMs = 3000;
-        String requestId = null;
-
-        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            log.info("Попытка отправки SMS через шлюз: {} из {}, телефон: {}, код: {}", attempt, maxAttempts, phone, code);
-            try {
-                requestId = smsGatewayService.sendSmsViaGateway(phone, code, purpose.name());
-                if (requestId != null) {
-                    log.info("SMS успешно отправлено через шлюз, requestId: {}", requestId);
-                    break;
-                } else {
-                    log.warn("Попытка {} отправки через шлюз вернула null", attempt);
-                }
-            } catch (Exception e) {
-                log.error("Ошибка при попытке отправки через шлюз, попытка {}", attempt, e);
+        try {
+            CompletableFuture<Boolean> future = smsGatewayService.sendSmsViaGatewayAsync(phone, code, purpose.name());
+            Boolean success = future.get(30, TimeUnit.SECONDS);
+            if (!success) {
+                throw new RuntimeException("Не удалось отправить SMS через шлюз (получен ответ false)");
             }
-
-            if (attempt < maxAttempts) {
-                try {
-                    Thread.sleep(delayMs);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException("Прервано ожидание между попытками отправки SMS", e);
-                }
-            }
-        }
-
-        if (requestId == null) {
-            log.error("Не удалось отправить SMS после {} попыток для телефона {}", maxAttempts, phone);
-            throw new RuntimeException("Не удалось отправить SMS. Попробуйте позже.");
+            log.info("SMS успешно отправлено через шлюз (асинхронно)");
+        } catch (TimeoutException e) {
+            log.error("Таймаут ожидания ответа от шлюза для телефона {}", phone);
+            throw new RuntimeException("Превышено время ожидания ответа от SMS-шлюза");
+        } catch (Exception e) {
+            log.error("Ошибка при отправке через шлюз", e);
+            throw new RuntimeException("Не удалось отправить SMS: " + e.getMessage());
         }
 
         // Возвращаем код (может понадобиться для тестов, но в продакшене не используется)
