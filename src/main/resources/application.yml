@@ -97,8 +97,8 @@ huawei:
 
 rustore:
   push:
-    api-key: SvzKG7oosMgH2QlY9OE6yne2WyvXmnQ0dPwIIxup8UIW4KgNFeM9TPgUEJtkYchM
-    project-id: jl4uTL62lrP4Kx3GlhMfSMi7y6f6eY0d
+    api-key: 2HhkORZThaC2c8q-nLDofSHT1jhn6k0uHq45yqQ5MyQZFLiByk4R5GZZ9lL8h56x
+    project-id: YVNeuZo6gSX1LepNWR1LpdqAMhnPZ0GM
     url: https://vkpns.rustore.ru/v1/projects/jl4uTL62lrP4Kx3GlhMfSMi7y6f6eY0d/messages:send
 
 verification:
