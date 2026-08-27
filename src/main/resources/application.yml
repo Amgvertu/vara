@@ -99,7 +99,7 @@ rustore:
   push:
     api-key: 2HhkORZThaC2c8q-nLDofSHT1jhn6k0uHq45yqQ5MyQZFLiByk4R5GZZ9lL8h56x
     project-id: YVNeuZo6gSX1LepNWR1LpdqAMhnPZ0GM
-    url: https://vkpns.rustore.ru/v1/projects/jl4uTL62lrP4Kx3GlhMfSMi7y6f6eY0d/messages:send
+    url: https://vkpns.rustore.ru/v1/projects/YVNeuZo6gSX1LepNWR1LpdqAMhnPZ0GM/messages:send
 
 verification:
   code:

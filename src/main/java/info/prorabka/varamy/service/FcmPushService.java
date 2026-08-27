@@ -51,11 +51,9 @@ public class FcmPushService implements PushService {
         for (String token : tokens) {
             Message message = Message.builder()
                     .setToken(token)
-                    .setNotification(Notification.builder()
-                            .setTitle(title)
-                            .setBody(body)
-                            .build())
                     .putData("type", "REAL")
+                    .putData("title", title)
+                    .putData("body", body)
                     .build();
             try {
                 String response = FirebaseMessaging.getInstance().send(message);
