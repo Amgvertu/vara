@@ -49,6 +49,7 @@ public class NotificationService {
     private final HmsTokenService hmsTokenService;
     private final RuStoreTokenService ruStoreTokenService;
     private final NotificationRetryScheduler retryScheduler;
+    private final Map<String, Long> lastSentMap = new ConcurrentHashMap<>();
 
     // ========== НАСТРОЙКИ ==========
 
@@ -156,6 +157,15 @@ public class NotificationService {
             saveNotification(userId, type, content, relatedEntityId);
             return;
         }
+
+        String key = userId.toString() + "_" + type;
+        Long lastSent = lastSentMap.get(key);
+        long now = System.currentTimeMillis();
+        if (lastSent != null && (now - lastSent) < 5000) { // 5 секунд
+            log.info("⏳ Пропускаем дублирующее уведомление для {} типа {}, отправлено менее 5 сек назад", userId, type);
+            return;
+        }
+        lastSentMap.put(key, now);
 
         // 3. Сохраняем уведомление в БД
         User user = userService.getUserById(userId);
