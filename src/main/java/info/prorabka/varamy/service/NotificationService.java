@@ -40,7 +40,7 @@ public class NotificationService {
     private final SimpUserRegistry userRegistry;   // для проверки активных сессий
     private final List<PushService> pushServices;
     private final Map<UUID, Long> lastFcmSentTime = new ConcurrentHashMap<>();
-    private static final long FCM_COOLDOWN_MS = 30 * 60 * 1000; // 30 минут
+    private static final long FCM_COOLDOWN_MS = 1 * 60 * 1000; // 1 минут
     private final ResponseRepository responseRepository;
     private final ResponseMapper responseMapper;
     private final AdMapper adMapper;
@@ -161,7 +161,7 @@ public class NotificationService {
         String key = userId.toString() + "_" + type;
         Long lastSent = lastSentMap.get(key);
         long now = System.currentTimeMillis();
-        if (lastSent != null && (now - lastSent) < 5000) { // 5 секунд
+        if (lastSent != null && (now - lastSent) < 1000) { // 5 секунд
             log.info("⏳ Пропускаем дублирующее уведомление для {} типа {}, отправлено менее 5 сек назад", userId, type);
             return;
         }
@@ -330,7 +330,7 @@ public class NotificationService {
             return true;
         }
         // Не чаще чем раз в 5 минут для одного пользователя
-        return System.currentTimeMillis() - lastSent > 5 * 60 * 1000;
+        return System.currentTimeMillis() - lastSent > 1 * 60 * 1000;
     }
 
     /**

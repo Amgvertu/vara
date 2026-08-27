@@ -7,7 +7,7 @@ plugins {
 
 group = 'info.prorabka'
 version = '0.0.1-SNAPSHOT'
-description = 'varamy'
+description = 'varamy-staging'
 
 java {
 }
