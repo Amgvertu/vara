@@ -254,42 +254,44 @@ public class NotificationService {
      * Отправляет уведомление через push, если есть активные токены
      */
     private void sendViaPushIfHasTokens(UUID userId, String type, String content, Notification notification) {
-        // Проверяем, есть ли у пользователя активные токены
-        boolean hasAnyToken = checkUserHasAnyToken(userId);
+        // 1. Определяем, какой сервис использовать (приоритет: FCM -> HMS -> RuStore)
+        PushService selectedService = null;
 
-        if (!hasAnyToken) {
-            log.info("ℹ️ User {} has no push tokens, notification saved only in DB", userId);
-            return;
-        }
-
-        // Проверяем, не отправляли ли недавно (защита от спама)
-        if (!shouldSendPushNow(userId)) {
-            log.debug("⏳ Push already sent recently for user {}, skipping", userId);
-            return;
-        }
-
-        // Определяем заголовок и тело для push-уведомления
-        String title = getPushTitle(type);
-        String body = getPushBody(type, content);
-
-        // Отправляем через все доступные push-сервисы
-        int sentCount = 0;
-        for (PushService pushService : pushServices) {
-            try {
-                sendPushNotification(userId, type, content, notification.getRelatedEntityId(), notification.getId());
-                sentCount++;
-                log.info("✅ Push sent via {} to user {}", pushService.getClass().getSimpleName(), userId);
-            } catch (Exception e) {
-                log.error("❌ Error sending push via {} to user {}: {}",
-                        pushService.getClass().getSimpleName(), userId, e.getMessage());
+        for (PushService service : pushServices) {
+            if (service instanceof FcmPushService) {
+                if (!fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    selectedService = service;
+                    break;
+                }
+            } else if (service instanceof HuaweiPushService) {
+                if (!hmsTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    selectedService = service;
+                    break;
+                }
+            } else if (service instanceof RuStorePushService) {
+                if (!ruStoreTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    selectedService = service;
+                    break;
+                }
             }
         }
 
-        if (sentCount > 0) {
-            lastFcmSentTime.put(userId, System.currentTimeMillis());
-            log.info("📱 Push notifications sent to user {} via {} services", userId, sentCount);
+        // 2. Если подходящий сервис найден – отправляем через него
+        if (selectedService != null) {
+            try {
+                String title = getPushTitle(type);
+                String body = getPushBody(type, content);
+                selectedService.sendNotification(userId, title, body);
+                lastFcmSentTime.put(userId, System.currentTimeMillis());
+                log.info("📱 Push notification sent to user {} via {}",
+                        userId, selectedService.getClass().getSimpleName());
+            } catch (Exception e) {
+                log.error("❌ Failed to send push via {}: {}",
+                        selectedService.getClass().getSimpleName(), e.getMessage());
+            }
         } else {
-            log.warn("⚠️ Failed to send push to user {} via all services", userId);
+            // Нет ни одного активного токена – уведомление только в БД
+            log.info("ℹ️ User {} has no push tokens, notification saved only in DB", userId);
         }
     }
 
@@ -805,17 +807,37 @@ public class NotificationService {
         SimpUser simpUser = userRegistry.getUser(userId.toString());
         boolean hasSession = (simpUser != null && simpUser.hasSessions());
 
-        // Если сессии нет - отправляем push
         if (!hasSession) {
-            boolean hasAnyToken = hasAnyPushToken(userId);
-            if (hasAnyToken) {
-                sendPushNotification(userId, type, content, relatedEntityId, notificationId);
-                log.info("✅ Push повторно отправлен для уведомления {}", notificationId);
+            // Выбираем первый доступный сервис с токенами
+            PushService selectedService = null;
+            for (PushService service : pushServices) {
+                if (service instanceof FcmPushService && !fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    selectedService = service;
+                    break;
+                } else if (service instanceof HuaweiPushService && !hmsTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    selectedService = service;
+                    break;
+                } else if (service instanceof RuStorePushService && !ruStoreTokenService.getActiveTokensForUser(userId).isEmpty()) {
+                    selectedService = service;
+                    break;
+                }
+            }
+            if (selectedService != null) {
+                String title = getNotificationTitle(type);
+                String body = content;
+                try {
+                    selectedService.sendNotification(userId, title, body);
+                    log.info("✅ Push повторно отправлен через {} для уведомления {}",
+                            selectedService.getClass().getSimpleName(), notificationId);
+                } catch (Exception e) {
+                    log.error("❌ Ошибка повторной отправки через {}: {}",
+                            selectedService.getClass().getSimpleName(), e.getMessage());
+                }
             } else {
                 log.info("ℹ️ У пользователя {} нет push-токенов для повторной отправки", userId);
             }
         } else {
-            // Если сессия есть - отправляем через WebSocket
+            // Если сессия есть – отправляем через WebSocket
             NotificationResponse response = toResponse(notification);
             messagingTemplate.convertAndSendToUser(
                     userId.toString(),
