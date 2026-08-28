@@ -254,45 +254,29 @@ public class NotificationService {
      * Отправляет уведомление через push, если есть активные токены
      */
     private void sendViaPushIfHasTokens(UUID userId, String type, String content, Notification notification) {
-        // 1. Определяем, какой сервис использовать (приоритет: FCM -> HMS -> RuStore)
-        PushService selectedService = null;
-
+        // Приоритет: RuStore → FCM → HMS
         for (PushService service : pushServices) {
-            if (service instanceof FcmPushService) {
-                if (!fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
-                    selectedService = service;
-                    break;
-                }
+            boolean hasTokens = false;
+            if (service instanceof RuStorePushService) {
+                hasTokens = !ruStoreTokenService.getActiveTokensForUser(userId).isEmpty();
+            } else if (service instanceof FcmPushService) {
+                hasTokens = !fcmTokenService.getActiveTokensForUser(userId).isEmpty();
             } else if (service instanceof HuaweiPushService) {
-                if (!hmsTokenService.getActiveTokensForUser(userId).isEmpty()) {
-                    selectedService = service;
-                    break;
-                }
-            } else if (service instanceof RuStorePushService) {
-                if (!ruStoreTokenService.getActiveTokensForUser(userId).isEmpty()) {
-                    selectedService = service;
-                    break;
+                hasTokens = !hmsTokenService.getActiveTokensForUser(userId).isEmpty();
+            }
+            if (hasTokens) {
+                try {
+                    String title = getPushTitle(type);
+                    String body = getPushBody(type, content);
+                    service.sendNotification(userId, title, body);
+                    log.info("📱 Push sent via {} to user {}", service.getClass().getSimpleName(), userId);
+                    return; // Успешно отправлено – выходим
+                } catch (Exception e) {
+                    log.error("❌ Failed via {}, fallback", service.getClass().getSimpleName(), e);
                 }
             }
         }
-
-        // 2. Если подходящий сервис найден – отправляем через него
-        if (selectedService != null) {
-            try {
-                String title = getPushTitle(type);
-                String body = getPushBody(type, content);
-                selectedService.sendNotification(userId, title, body);
-                lastFcmSentTime.put(userId, System.currentTimeMillis());
-                log.info("📱 Push notification sent to user {} via {}",
-                        userId, selectedService.getClass().getSimpleName());
-            } catch (Exception e) {
-                log.error("❌ Failed to send push via {}: {}",
-                        selectedService.getClass().getSimpleName(), e.getMessage());
-            }
-        } else {
-            // Нет ни одного активного токена – уведомление только в БД
-            log.info("ℹ️ User {} has no push tokens, notification saved only in DB", userId);
-        }
+        log.info("ℹ️ No working push channel for user {}", userId);
     }
 
     /**
@@ -323,21 +307,7 @@ public class NotificationService {
         return false;
     }
 
-    /**
-     * Проверяет, можно ли отправлять push сейчас (защита от спама)
-     */
-    private boolean shouldSendPushNow(UUID userId) {
-        Long lastSent = lastFcmSentTime.get(userId);
-        if (lastSent == null) {
-            return true;
-        }
-        // Не чаще чем раз в 5 минут для одного пользователя
-        return System.currentTimeMillis() - lastSent > 1 * 60 * 1000;
-    }
 
-    /**
-     * Возвращает заголовок для push-уведомления в зависимости от типа
-     */
     private String getPushTitle(String type) {
         switch (type) {
             case "RESPONSE":
@@ -808,7 +778,6 @@ public class NotificationService {
         boolean hasSession = (simpUser != null && simpUser.hasSessions());
 
         if (!hasSession) {
-            // Выбираем первый доступный сервис с токенами
             PushService selectedService = null;
             for (PushService service : pushServices) {
                 if (service instanceof FcmPushService && !fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
@@ -837,7 +806,7 @@ public class NotificationService {
                 log.info("ℹ️ У пользователя {} нет push-токенов для повторной отправки", userId);
             }
         } else {
-            // Если сессия есть – отправляем через WebSocket
+            // WebSocket отправка (без изменений)
             NotificationResponse response = toResponse(notification);
             messagingTemplate.convertAndSendToUser(
                     userId.toString(),
@@ -886,34 +855,6 @@ public class NotificationService {
         return false;
     }
 
-    /**
-     * Отправка push-уведомления через все доступные сервисы
-     */
-    private void sendPushNotification(UUID userId, String type, String content, UUID relatedEntityId, Long notificationId) {
-        String title = getNotificationTitle(type);
-        String body = content;
-
-        // Если title не определен, используем дефолтный
-        if (title == null) {
-            title = "Новое уведомление";
-        }
-
-        for (PushService pushService : pushServices) {
-            try {
-                pushService.sendNotification(userId, title, body);
-                log.info("📤 Push отправлен через {} для пользователя {}",
-                        pushService.getClass().getSimpleName(), userId);
-            } catch (Exception e) {
-                log.error("❌ Ошибка отправки push через {}: {}",
-                        pushService.getClass().getSimpleName(), e.getMessage());
-
-                // Запланировать повторную отправку (используем notificationId)
-                if (notificationId != null) {
-                    retryScheduler.scheduleRetry(notificationId);
-                }
-            }
-        }
-    }
 
     /**
      * Получение заголовка для уведомления по типу
