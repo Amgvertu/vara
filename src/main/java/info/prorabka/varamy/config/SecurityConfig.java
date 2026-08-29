@@ -75,7 +75,11 @@ public class SecurityConfig {
                 "http://localhost:5500",
                 "http://127.0.0.1:5500",
                 "http://192.168.0.70:8081",
-                "http://92.125.255.63:8081"
+                "http://92.125.255.63:8081",
+                "http://192.168.0.119",          // ← добавляем
+                "http://192.168.0.119:8082",     // ← можно и с портом
+                "http://localhost:8082",         // для эмулятора
+                "http://127.0.0.1:8082"
         ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(Arrays.asList("*"));

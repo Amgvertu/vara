@@ -38,7 +38,11 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                         "https://varamy.online",
                         "https://www.varamy.online",
                         "https://katok.pro",
-                        "https://www.katok.pro"
+                        "https://www.katok.pro",
+                        "http://192.168.0.119",          // ← добавляем
+                        "http://192.168.0.119:8082",     // ← можно и с портом
+                        "http://localhost:8082",         // для эмулятора
+                        "http://127.0.0.1:8082"
                 )
                 .addInterceptors(new JwtHandshakeInterceptor());
     }
