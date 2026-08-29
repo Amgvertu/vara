@@ -53,6 +53,7 @@ public class NotificationService {
     private final HuaweiPushService huaweiPushService;
     private final NotificationRetryScheduler retryScheduler;
     private final Map<String, Long> lastSentMap = new ConcurrentHashMap<>();
+    private final UserActivityService userActivityService;
 
     // ========== НАСТРОЙКИ ==========
 
@@ -186,12 +187,9 @@ public class NotificationService {
         SimpUser simpUser = userRegistry.getUser(userId.toString());
         boolean hasSession = (simpUser != null && simpUser.hasSessions());
 
-        if (hasSession) {
-            // Сессия есть – отправляем через WebSocket немедленно
+        if (hasSession && userActivityService.isActive(userId)) {
             sendViaWebSocket(userId, notification);
-            sendViaPushIfHasTokens(userId, type, content, notification);
         } else {
-            // Сессии нет – проверяем наличие push-токенов и отправляем
             sendViaPushIfHasTokens(userId, type, content, notification);
         }
     }
