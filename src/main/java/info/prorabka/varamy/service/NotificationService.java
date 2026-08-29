@@ -48,6 +48,9 @@ public class NotificationService {
     private final FcmTokenService fcmTokenService;
     private final HmsTokenService hmsTokenService;
     private final RuStoreTokenService ruStoreTokenService;
+    private final RuStorePushService ruStorePushService;
+    private final FcmPushService fcmPushService;
+    private final HuaweiPushService huaweiPushService;
     private final NotificationRetryScheduler retryScheduler;
     private final Map<String, Long> lastSentMap = new ConcurrentHashMap<>();
 
@@ -254,28 +257,45 @@ public class NotificationService {
      * Отправляет уведомление через push, если есть активные токены
      */
     private void sendViaPushIfHasTokens(UUID userId, String type, String content, Notification notification) {
-        // Приоритет: RuStore → FCM → HMS
-        for (PushService service : pushServices) {
-            boolean hasTokens = false;
-            if (service instanceof RuStorePushService) {
-                hasTokens = !ruStoreTokenService.getActiveTokensForUser(userId).isEmpty();
-            } else if (service instanceof FcmPushService) {
-                hasTokens = !fcmTokenService.getActiveTokensForUser(userId).isEmpty();
-            } else if (service instanceof HuaweiPushService) {
-                hasTokens = !hmsTokenService.getActiveTokensForUser(userId).isEmpty();
-            }
-            if (hasTokens) {
-                try {
-                    String title = getPushTitle(type);
-                    String body = getPushBody(type, content);
-                    service.sendNotification(userId, title, body);
-                    log.info("📱 Push sent via {} to user {}", service.getClass().getSimpleName(), userId);
-                    return; // Успешно отправлено – выходим
-                } catch (Exception e) {
-                    log.error("❌ Failed via {}, fallback", service.getClass().getSimpleName(), e);
-                }
+        // 1. RuStore – приоритетный канал
+        if (!ruStoreTokenService.getActiveTokensForUser(userId).isEmpty()) {
+            try {
+                String title = getPushTitle(type);
+                String body = getPushBody(type, content);
+                ruStorePushService.sendNotification(userId, title, body);
+                log.info("📱 Push sent via RuStore to user {}", userId);
+                return;
+            } catch (Exception e) {
+                log.error("❌ RuStore push failed, fallback to FCM", e);
             }
         }
+
+        // 2. FCM – резервный канал
+        if (!fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
+            try {
+                String title = getPushTitle(type);
+                String body = getPushBody(type, content);
+                fcmPushService.sendNotification(userId, title, body);
+                log.info("📱 Push sent via FCM to user {}", userId);
+                return;
+            } catch (Exception e) {
+                log.error("❌ FCM push failed, fallback to HMS", e);
+            }
+        }
+
+        // 3. HMS – последний резерв
+        if (!hmsTokenService.getActiveTokensForUser(userId).isEmpty()) {
+            try {
+                String title = getPushTitle(type);
+                String body = getPushBody(type, content);
+                huaweiPushService.sendNotification(userId, title, body);
+                log.info("📱 Push sent via HMS to user {}", userId);
+                return;
+            } catch (Exception e) {
+                log.error("❌ HMS push failed", e);
+            }
+        }
+
         log.info("ℹ️ No working push channel for user {}", userId);
     }
 
