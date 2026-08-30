@@ -6,11 +6,13 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.messaging.SessionConnectEvent;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
+import lombok.extern.slf4j.Slf4j;
 
 import java.security.Principal;
 import java.util.UUID;
 
 @Component
+@Slf4j
 @RequiredArgsConstructor
 public class WebSocketEventListener {
     private final UserActivityService userActivityService;
@@ -19,7 +21,8 @@ public class WebSocketEventListener {
     public void handleConnect(SessionConnectEvent event) {
         Principal user = event.getUser();
         if (user != null) {
-            userActivityService.setActive(UUID.fromString(user.getName()), true);
+            log.info("🔌 WebSocket подключился: userId={}", user.getName());
+            //userActivityService.setActive(UUID.fromString(user.getName()), true);
         }
     }
 
@@ -27,6 +30,7 @@ public class WebSocketEventListener {
     public void handleDisconnect(SessionDisconnectEvent event) {
         Principal user = event.getUser();
         if (user != null) {
+            log.info("🔌 WebSocket отключился: userId={}", user.getName());
             userActivityService.setActive(UUID.fromString(user.getName()), false);
         }
     }

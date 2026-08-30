@@ -186,12 +186,19 @@ public class NotificationService {
         // 4. Проверяем наличие активной WebSocket-сессии
         SimpUser simpUser = userRegistry.getUser(userId.toString());
         boolean hasSession = (simpUser != null && simpUser.hasSessions());
+        boolean isActive = userActivityService.isActive(userId);
 
-        if (hasSession && userActivityService.isActive(userId)) {
+        log.info("📨 Отправка уведомления: userId={}, type={}, hasSession={}, isActive={}",
+                userId, type, hasSession, isActive);
+
+        /*if (hasSession && isActive) {
+            log.info("✅ Отправляем через WebSocket (сессия есть и пользователь активен)");
             sendViaWebSocket(userId, notification);
         } else {
+            log.info("📱 Отправляем через push (сессии нет или пользователь неактивен)");
             sendViaPushIfHasTokens(userId, type, content, notification);
-        }
+        }*/
+        sendViaPushIfHasTokens(userId, type, content, notification);
     }
 
     /**
