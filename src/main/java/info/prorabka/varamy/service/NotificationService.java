@@ -191,14 +191,13 @@ public class NotificationService {
         log.info("📨 Отправка уведомления: userId={}, type={}, hasSession={}, isActive={}",
                 userId, type, hasSession, isActive);
 
-        /*if (hasSession && isActive) {
+        if (hasSession && isActive) {
             log.info("✅ Отправляем через WebSocket (сессия есть и пользователь активен)");
             sendViaWebSocket(userId, notification);
         } else {
             log.info("📱 Отправляем через push (сессии нет или пользователь неактивен)");
             sendViaPushIfHasTokens(userId, type, content, notification);
-        }*/
-        sendViaPushIfHasTokens(userId, type, content, notification);
+        }
     }
 
     /**
