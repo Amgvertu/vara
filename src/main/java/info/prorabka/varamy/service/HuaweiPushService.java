@@ -43,80 +43,82 @@ public class HuaweiPushService implements PushService {
         body.add("client_id", properties.getClientId());
         body.add("client_secret", properties.getClientSecret());
 
-
-
         HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
 
         try {
             ResponseEntity<String> response = restTemplate.exchange(
-                    properties.getTokenUrl(),
-                    HttpMethod.POST,
-                    request,
-                    String.class
-            );
+                    properties.getTokenUrl(), HttpMethod.POST, request, String.class);
             if (response.getStatusCode() == HttpStatus.OK) {
                 JsonNode json = objectMapper.readTree(response.getBody());
                 cachedAccessToken = json.get("access_token").asText();
                 int expiresIn = json.get("expires_in").asInt();
                 tokenExpiryTime = now + expiresIn * 1000L;
-                log.info("Huawei access token obtained, expires in {} sec", expiresIn);
                 return cachedAccessToken;
-            } else {
-                log.error("Failed to get Huawei access token: {}", response.getStatusCode());
-                return null;
             }
+            log.error("HMS: не удалось получить access token: {}", response.getStatusCode());
+            return null;
         } catch (Exception e) {
-            log.error("Error obtaining Huawei access token", e);
+            log.error("HMS: исключение при получении access token", e);
             return null;
         }
     }
 
     @Override
-    public void sendWakeUpNotification(UUID userId) {
+    public boolean sendWakeUpNotification(UUID userId) {
         List<String> tokens = hmsTokenService.getActiveTokensForUser(userId);
         if (tokens.isEmpty()) {
-            log.warn("No active HMS tokens for user {}", userId);
-            return;
+            log.warn("HMS: нет активных токенов у пользователя {}", userId);
+            return false;
         }
+        boolean atLeastOneSent = false;
         for (String token : tokens) {
-            sendHuaweiPush(userId, token, null, null, "WAKE_UP");
+            if (sendHuaweiPush(userId, token, null, null, "WAKE_UP")) {
+                atLeastOneSent = true;
+            }
         }
+        return atLeastOneSent;
     }
 
     @Override
-    public void sendNotification(UUID userId, String title, String body) {
+    public boolean sendNotification(UUID userId, String title, String body) {
         List<String> tokens = hmsTokenService.getActiveTokensForUser(userId);
         if (tokens.isEmpty()) {
-            log.warn("No active HMS tokens for user {}", userId);
-            return;
+            log.warn("HMS: нет активных токенов у пользователя {}", userId);
+            return false;
         }
+
+        boolean atLeastOneSent = false;
         for (String token : tokens) {
-            sendHuaweiPush(userId, token, title, body, "REAL");
+            if (sendHuaweiPush(userId, token, title, body, "REAL")) {
+                atLeastOneSent = true;
+            }
         }
+        return atLeastOneSent;
     }
 
-    private void sendHuaweiPush(UUID userId, String token, String title, String body, String type) {
+    private boolean sendHuaweiPush(UUID userId, String token, String title, String body, String type) {
         try {
             String accessToken = getAccessToken();
             if (accessToken == null) {
-                log.error("❌ Не удалось получить Huawei access token");
-                return;
+                log.error("HMS: access token отсутствует");
+                return false;
             }
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             headers.setBearerAuth(accessToken);
 
-            Map<String, Object> payload = new HashMap<>();
             Map<String, Object> message = new HashMap<>();
             message.put("token", new String[]{token});
 
+            // data-payload (обрабатывается приложением)
             Map<String, String> data = new HashMap<>();
             data.put("type", type);
             if (title != null) data.put("title", title);
             if (body != null) data.put("body", body);
             message.put("data", data);
 
+            // notification-payload (показывается системой)
             if (title != null && body != null) {
                 Map<String, String> notification = new HashMap<>();
                 notification.put("title", title);
@@ -129,43 +131,40 @@ public class HuaweiPushService implements PushService {
             Map<String, Object> collapseKey = new HashMap<>();
             collapseKey.put("key", "msg");
             androidConfig.put("collapseKey", collapseKey);
+            androidConfig.put("urgency", "HIGH"); // HIGH priority
             message.put("android", androidConfig);
 
+            Map<String, Object> payload = new HashMap<>();
             payload.put("message", message);
-            String jsonPayload = objectMapper.writeValueAsString(payload);
 
             String pushUrl = String.format(properties.getPushUrl(), properties.getAppId());
+            String jsonPayload = objectMapper.writeValueAsString(payload);
+
             HttpEntity<String> request = new HttpEntity<>(jsonPayload, headers);
-
             ResponseEntity<String> response = restTemplate.exchange(
-                    pushUrl, HttpMethod.POST, request, String.class
-            );
+                    pushUrl, HttpMethod.POST, request, String.class);
 
-            if (response.getStatusCode().is2xxSuccessful()) {
-                // Проверяем тело ответа
-                try {
-                    JsonNode json = objectMapper.readTree(response.getBody());
-                    String code = json.has("code") ? json.get("code").asText() : null;
-                    if ("80000000".equals(code)) {
-                        log.info("✅ Huawei Push успешно отправлен пользователю {}", userId);
-                    } else if ("80100000".equals(code)) {
-                        // Недействительный токен
-                        log.warn("🔴 Недействительный HMS токен: {}", token);
-                        hmsTokenService.unregisterToken(userId, token);
-                    } else {
-                        log.error("❌ Huawei Push ошибка: code={}, body={}", code, response.getBody());
-                    }
-                } catch (Exception e) {
-                    log.warn("⚠️ Не удалось распарсить ответ Huawei: {}", response.getBody());
-                }
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                log.error("HMS: статус {}", response.getStatusCode());
+                return false;
+            }
+
+            JsonNode json = objectMapper.readTree(response.getBody());
+            String code = json.has("code") ? json.get("code").asText() : null;
+            if ("80000000".equals(code)) {
+                log.info("HMS отправлен пользователю {}", userId);
+                return true;
+            } else if ("80100000".equals(code)) {
+                log.warn("HMS токен недействителен, удаляем");
+                hmsTokenService.unregisterToken(userId, token);
+                return false;
             } else {
-                log.error("❌ Huawei Push ошибка: status={}, body={}",
-                        response.getStatusCode().value(), response.getBody());
+                log.error("HMS ошибка: code={}, body={}", code, response.getBody());
+                return false;
             }
         } catch (Exception e) {
-            log.error("❌ Ошибка отправки Huawei Push: {}", e.getMessage(), e);
+            log.error("HMS исключение при отправке: {}", e.getMessage(), e);
+            return false;
         }
     }
-
-
 }

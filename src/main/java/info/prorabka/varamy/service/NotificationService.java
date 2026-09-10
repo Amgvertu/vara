@@ -9,7 +9,6 @@ import info.prorabka.varamy.exception.ResourceNotFoundException;
 import info.prorabka.varamy.mapper.AdMapper;
 import info.prorabka.varamy.mapper.ResponseMapper;
 import info.prorabka.varamy.repository.*;
-import info.prorabka.varamy.service.NotificationRetryScheduler;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -39,8 +38,9 @@ public class NotificationService {
     private final SimpMessagingTemplate messagingTemplate;
     private final SimpUserRegistry userRegistry;   // для проверки активных сессий
     private final List<PushService> pushServices;
+    private final PushSender pushSender;
     private final Map<UUID, Long> lastFcmSentTime = new ConcurrentHashMap<>();
-    private static final long FCM_COOLDOWN_MS = 1 * 60 * 1000; // 1 минут
+    private static final long FCM_COOLDOWN_MS = 60 * 1000; // 1 минут
     private final ResponseRepository responseRepository;
     private final ResponseMapper responseMapper;
     private final AdMapper adMapper;
@@ -196,7 +196,7 @@ public class NotificationService {
             sendViaWebSocket(userId, notification);
         } else {
             log.info("📱 Отправляем через push (сессии нет или пользователь неактивен)");
-            sendViaPushIfHasTokens(userId, type, content, notification);
+            pushSender.sendToUser(userId, getPushTitle(type), getPushBody(type, content));
         }
     }
 
@@ -256,81 +256,6 @@ public class NotificationService {
             log.error("❌ Failed to send WebSocket notification to user {}: {}", userId, e.getMessage(), e);
         }
     }
-
-    /**
-     * Отправляет уведомление через push, если есть активные токены
-     */
-    private void sendViaPushIfHasTokens(UUID userId, String type, String content, Notification notification) {
-        // 1. RuStore – приоритетный канал
-        if (!ruStoreTokenService.getActiveTokensForUser(userId).isEmpty()) {
-            try {
-                String title = getPushTitle(type);
-                String body = getPushBody(type, content);
-                ruStorePushService.sendNotification(userId, title, body);
-                log.info("📱 Push sent via RuStore to user {}", userId);
-                return;
-            } catch (Exception e) {
-                log.error("❌ RuStore push failed, fallback to FCM", e);
-            }
-        }
-
-        // 2. FCM – резервный канал
-        if (!fcmTokenService.getActiveTokensForUser(userId).isEmpty()) {
-            try {
-                String title = getPushTitle(type);
-                String body = getPushBody(type, content);
-                fcmPushService.sendNotification(userId, title, body);
-                log.info("📱 Push sent via FCM to user {}", userId);
-                return;
-            } catch (Exception e) {
-                log.error("❌ FCM push failed, fallback to HMS", e);
-            }
-        }
-
-        // 3. HMS – последний резерв
-        if (!hmsTokenService.getActiveTokensForUser(userId).isEmpty()) {
-            try {
-                String title = getPushTitle(type);
-                String body = getPushBody(type, content);
-                huaweiPushService.sendNotification(userId, title, body);
-                log.info("📱 Push sent via HMS to user {}", userId);
-                return;
-            } catch (Exception e) {
-                log.error("❌ HMS push failed", e);
-            }
-        }
-
-        log.info("ℹ️ No working push channel for user {}", userId);
-    }
-
-    /**
-     * Проверяет наличие любого активного push-токена у пользователя
-     */
-    private boolean checkUserHasAnyToken(UUID userId) {
-        // Проверяем FCM
-        List<String> fcmTokens = fcmTokenService.getActiveTokensForUser(userId);
-        if (!fcmTokens.isEmpty()) {
-            log.debug("User {} has {} FCM tokens", userId, fcmTokens.size());
-            return true;
-        }
-
-        // Проверяем HMS
-        List<String> hmsTokens = hmsTokenService.getActiveTokensForUser(userId);
-        if (!hmsTokens.isEmpty()) {
-            log.debug("User {} has {} HMS tokens", userId, hmsTokens.size());
-            return true;
-        }
-
-        // Проверяем RuStore
-        List<String> ruStoreTokens = ruStoreTokenService.getActiveTokensForUser(userId);
-        if (!ruStoreTokens.isEmpty()) {
-            log.debug("User {} has {} RuStore tokens", userId, ruStoreTokens.size());
-            return true;
-        }
-
-        return false;
-    }
-
 
     private String getPushTitle(String type) {
         switch (type) {
@@ -751,25 +676,6 @@ public class NotificationService {
         result.put("HMS", hmsTokenService.getActiveTokensForUser(userId).size());
         result.put("RuStore", ruStoreTokenService.getActiveTokensForUser(userId).size());
         return result;
-    }
-
-    /**
-     * Отправляет тестовое push-уведомление пользователю (для отладки)
-     */
-    public void sendTestPush(UUID userId) {
-        String title = "🔔 Тестовое уведомление";
-        String body = "Если вы это видите, push-уведомления работают!";
-
-        for (PushService pushService : pushServices) {
-            try {
-                pushService.sendNotification(userId, title, body);
-                log.info("✅ Test push sent via {} to user {}",
-                        pushService.getClass().getSimpleName(), userId);
-            } catch (Exception e) {
-                log.error("❌ Failed to send test push via {}: {}",
-                        pushService.getClass().getSimpleName(), e.getMessage());
-            }
-        }
     }
 
     /**

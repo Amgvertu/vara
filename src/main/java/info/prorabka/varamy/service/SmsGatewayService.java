@@ -11,14 +11,13 @@ import org.springframework.messaging.simp.user.SimpUser;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -26,8 +25,9 @@ import java.util.concurrent.Executors;
 public class SmsGatewayService {
 
     private final SimpMessagingTemplate messagingTemplate;
-    private final List<PushService> pushServices;           // <-- добавить
-    private final SimpUserRegistry userRegistry;   // <-- добавить
+    private final SimpUserRegistry userRegistry;
+    private final PushSender pushSender;
+
     private final Map<String, CompletableFuture<Boolean>> pendingRequests = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(2);
 
@@ -38,96 +38,119 @@ public class SmsGatewayService {
     private boolean gatewayEnabled;
 
     /**
-     * Отправляет команду на SMS-шлюз.
-     * @param phone номер телефона
-     * @param code код подтверждения
-     * @param purpose цель (REGISTRATION, PASSWORD_RESET, PHONE_CHANGE)
-     * @return requestId или null в случае ошибки
+     * Асинхронная отправка SMS через шлюз.
+     * Если WebSocket шлюза не активен — сначала отправляется WAKE_UP
+     * (RuStore → FCM → HMS), затем ожидается подключение до 25 секунд,
+     * и только потом отправляется команда.
      */
-    public String sendSmsViaGateway(String phone, String code, String purpose) {
-        if (!gatewayEnabled) {
-            log.warn("SMS Gateway is disabled. Enable via sms.gateway.enabled=true");
-            return null;
-        }
-        if (gatewayUserId == null || gatewayUserId.isEmpty()) {
-            log.error("SMS Gateway user ID not configured. Set sms.gateway.user-id");
-            return null;
-        }
-
-        String requestId = UUID.randomUUID().toString();
-        SmsCommand command = new SmsCommand(requestId, phone, code, purpose);
-
-        // Проверяем, есть ли активная WebSocket-сессия у шлюза
-        SimpUser user = userRegistry.getUser(gatewayUserId);
-        boolean hasSession = (user != null && user.hasSessions());
-
-        if (hasSession) {
-            // Сессия есть – отправляем через WebSocket
-            try {
-                messagingTemplate.convertAndSendToUser(gatewayUserId, "/queue/sms-commands", command);
-                log.info("SMS command sent to gateway for phone {} (requestId={})", phone, requestId);
-                return requestId;
-            } catch (Exception e) {
-                log.error("Failed to send SMS command via WebSocket", e);
-                return null;
-            }
-        } else {
-            // Сессии нет – отправляем пробуждение через все доступные push-каналы
-            log.warn("No active WebSocket session for gateway user {}, sending wake-up via all push services", gatewayUserId);
-            UUID userId = UUID.fromString(gatewayUserId);
-            for (PushService pushService : pushServices) {
-                try {
-                    pushService.sendWakeUpNotification(userId);
-                    log.info("Wake-up sent via {} to gateway user {}", pushService.getClass().getSimpleName(), gatewayUserId);
-                } catch (Exception e) {
-                    log.error("Failed to send wake-up via {}: {}", pushService.getClass().getSimpleName(), e.getMessage());
-                }
-            }
-            return null;
-        }
-    }
-
     public CompletableFuture<Boolean> sendSmsViaGatewayAsync(String phone, String code, String purpose) {
         CompletableFuture<Boolean> future = new CompletableFuture<>();
-        String requestId = UUID.randomUUID().toString();
 
-        // Сохраняем future в мапу
+        if (!gatewayEnabled) {
+            log.error("SMS-шлюз отключён (sms.gateway.enabled=false)");
+            future.complete(false);
+            return future;
+        }
+        if (gatewayUserId == null || gatewayUserId.isEmpty()) {
+            log.error("Не задан sms.gateway.user-id");
+            future.complete(false);
+            return future;
+        }
+
+        String requestId = UUID.randomUUID().toString();
         pendingRequests.put(requestId, future);
 
-        // Создаем команду для шлюза
-        SmsCommand command = new SmsCommand(requestId, phone, code, purpose);
+        // Вся работа — в фоне, чтобы не блокировать вызывающий поток
+        scheduler.execute(() -> {
+            try {
+                // 1. Убеждаемся, что шлюз подключён (иначе — wake-up + ожидание)
+                boolean ready = ensureGatewayConnected();
+                if (!ready) {
+                    pendingRequests.remove(requestId);
+                    future.complete(false);
+                    return;
+                }
 
-        // Отправляем через WebSocket
-        messagingTemplate.convertAndSendToUser(
-                gatewayUserId,
-                "/queue/sms-commands",
-                command
-        );
+                // 2. Отправляем команду
+                SmsCommand command = new SmsCommand(requestId, phone, code, purpose);
+                messagingTemplate.convertAndSendToUser(
+                        gatewayUserId, "/queue/sms-commands", command);
+                log.info("SMS-команда отправлена шлюзу (requestId={}, phone={})",
+                        requestId, phone);
 
-        // Таймаут через 30 секунд
-        scheduler.schedule(() -> {
-            CompletableFuture<Boolean> pending = pendingRequests.remove(requestId);
-            if (pending != null && !pending.isDone()) {
-                pending.complete(false);
-                log.warn("Таймаут ожидания ответа от шлюза для requestId={}", requestId);
+                // 3. Ждём ответа от шлюза 15 секунд
+                scheduler.schedule(() -> {
+                    CompletableFuture<Boolean> p = pendingRequests.remove(requestId);
+                    if (p != null && !p.isDone()) {
+                        p.complete(false);
+                        log.warn("Таймаут ответа от шлюза (requestId={})", requestId);
+                    }
+                }, 15, TimeUnit.SECONDS);
+
+            } catch (Exception e) {
+                log.error("Ошибка отправки SMS через шлюз", e);
+                pendingRequests.remove(requestId);
+                future.complete(false);
             }
-        }, 30, TimeUnit.SECONDS);
+        });
 
         return future;
     }
 
     /**
-     * Обработка ответа от шлюза
+     * Проверяет активную WebSocket-сессию шлюза.
+     * Если её нет — отправляет WAKE_UP и ждёт подключения до 25 секунд.
+     */
+    private boolean ensureGatewayConnected() {
+        if (hasSession()) {
+            log.info("WebSocket шлюза уже активен");
+            return true;
+        }
+
+        log.warn("WebSocket шлюза не активен — отправляем WAKE_UP");
+        try {
+            pushSender.sendWakeUp(UUID.fromString(gatewayUserId));
+        } catch (Exception e) {
+            log.error("Ошибка отправки WAKE_UP", e);
+        }
+
+        long deadline = System.currentTimeMillis() + 25_000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (hasSession()) {
+                log.info("Шлюз подключился после WAKE_UP");
+                // Небольшая пауза, чтобы клиент успел подписаться на очередь
+                try { Thread.sleep(500); } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                return true;
+            }
+            try { Thread.sleep(500); } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        log.error("Шлюз не подключился за 25 секунд после WAKE_UP");
+        return false;
+    }
+
+    private boolean hasSession() {
+        SimpUser user = userRegistry.getUser(gatewayUserId);
+        return user != null && user.hasSessions();
+    }
+
+    /**
+     * Обработка ответа от шлюза.
      */
     @MessageMapping("/sms-response")
     public void handleSmsResponse(SmsResponse response) {
         CompletableFuture<Boolean> future = pendingRequests.remove(response.getRequestId());
         if (future != null) {
             future.complete(response.isSuccess());
-            log.info("Получен ответ от шлюза: requestId={}, success={}",
+            log.info("Ответ от шлюза: requestId={}, success={}",
                     response.getRequestId(), response.isSuccess());
         } else {
-            log.warn("Получен ответ от шлюза с неизвестным requestId={}", response.getRequestId());
+            log.warn("Получен ответ с неизвестным requestId={}", response.getRequestId());
         }
     }
 }

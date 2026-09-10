@@ -75,7 +75,7 @@ public class VerificationService {
 
         try {
             CompletableFuture<Boolean> future = smsGatewayService.sendSmsViaGatewayAsync(phone, code, purpose.name());
-            Boolean success = future.get(30, TimeUnit.SECONDS);
+            Boolean success = future.get(50, TimeUnit.SECONDS);
             if (!success) {
                 throw new RuntimeException("Не удалось отправить SMS через шлюз (получен ответ false)");
             }

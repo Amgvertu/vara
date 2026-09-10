@@ -1,14 +1,11 @@
 package info.prorabka.varamy.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.HashMap;
@@ -28,102 +25,60 @@ public class RuStorePushService implements PushService {
     @Value("${rustore.push.api-key:}")
     private String apiKey;
 
-    @Value("${rustore.push.project-id:}")
-    private String projectId;
-
-    @Value("${rustore.push.url:https://push-cloud.vk.com/api/v1/messages}")
+    @Value("${rustore.push.url:}")
     private String pushUrl;
 
-    // Хранилище для OAuth-токена
-    private String cachedAccessToken;
-    private long tokenExpiryTime;
+    @Override
+    public boolean sendWakeUpNotification(UUID userId) {
+        List<String> tokens = tokenService.getActiveTokensForUser(userId);
+        if (tokens.isEmpty()) {
+            log.warn("RuStore: нет активных токенов у пользователя {}", userId);
+            return false;
+        }
+        boolean atLeastOneSent = false;
+        for (String token : tokens) {
+            if (sendRuStorePush(userId, token, null, null, "WAKE_UP")) {
+                atLeastOneSent = true;
+            }
+        }
+        return atLeastOneSent;
+    }
+
+    @Override
+    public boolean sendNotification(UUID userId, String title, String body) {
+        List<String> tokens = tokenService.getActiveTokensForUser(userId);
+        if (tokens.isEmpty()) {
+            log.warn("RuStore: нет активных токенов у пользователя {}", userId);
+            return false;
+        }
+
+        boolean atLeastOneSent = false;
+        for (String token : tokens) {
+            if (sendRuStorePush(userId, token, title, body, "REAL")) {
+                atLeastOneSent = true;
+            }
+        }
+        return atLeastOneSent;
+    }
 
     /**
-     * Получение OAuth-токена для RuStore (Client Credentials Flow)
+     * @return true, если отправка успешна
      */
-    private synchronized String getAccessToken() {
-        long now = System.currentTimeMillis();
-
-        // Если токен ещё действителен (с запасом 5 минут)
-        if (cachedAccessToken != null && now < tokenExpiryTime - 300000) {
-            return cachedAccessToken;
+    private boolean sendRuStorePush(UUID userId, String deviceToken,
+                                    String title, String body, String type) {
+        if (pushUrl == null || pushUrl.isEmpty()) {
+            log.error("RuStore: не задан rustore.push.url");
+            return false;
         }
-
-        log.info("🔄 Получение нового OAuth-токена для RuStore...");
+        if (apiKey == null || apiKey.isEmpty()) {
+            log.error("RuStore: не задан rustore.push.api-key");
+            return false;
+        }
 
         try {
-            // URL для получения токена
-            String tokenUrl = "https://push-cloud.vk.com/api/v1/oauth/token";
-
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-
-            // Параметры для Client Credentials Flow
-            MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-            body.add("grant_type", "client_credentials");
-            body.add("client_id", "rustore_client_id"); // Замените на реальный client_id
-            body.add("client_secret", apiKey); // Ваш API-ключ используется как client_secret
-
-            HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
-
-            ResponseEntity<String> response = restTemplate.exchange(
-                    tokenUrl,
-                    HttpMethod.POST,
-                    request,
-                    String.class
-            );
-
-            if (response.getStatusCode() == HttpStatus.OK) {
-                JsonNode json = objectMapper.readTree(response.getBody());
-                cachedAccessToken = json.get("access_token").asText();
-                int expiresIn = json.get("expires_in").asInt();
-                tokenExpiryTime = now + (expiresIn * 1000L);
-                log.info("✅ RuStore OAuth-токен получен, истекает через {} сек", expiresIn);
-                return cachedAccessToken;
-            } else {
-                log.error("❌ Ошибка получения RuStore OAuth-токена: {}", response.getStatusCode());
-                return null;
-            }
-        } catch (Exception e) {
-            log.error("❌ Исключение при получении RuStore OAuth-токена", e);
-            return null;
-        }
-    }
-
-    @Override
-    public void sendWakeUpNotification(UUID userId) {
-        List<String> tokens = tokenService.getActiveTokensForUser(userId);
-        if (tokens.isEmpty()) {
-            log.warn("⚠️ Нет активных RuStore токенов для пользователя {}", userId);
-            return;
-        }
-
-        for (String token : tokens) {
-            sendRuStorePush(token, null, null, "WAKE_UP");
-        }
-    }
-
-    @Override
-    public void sendNotification(UUID userId, String title, String body) {
-        List<String> tokens = tokenService.getActiveTokensForUser(userId);
-        if (tokens.isEmpty()) {
-            log.warn("⚠️ Нет активных RuStore токенов для пользователя {}", userId);
-            return;
-        }
-
-        for (String token : tokens) {
-            sendRuStorePush(token, title, body, "REAL");
-        }
-    }
-
-    private void sendRuStorePush(String deviceToken, String title, String body, String type) {
-        try {
-            // Формируем URL с projectId
-            String url = String.format("https://vkpns.rustore.ru/v1/projects/%s/messages:send", projectId);
-
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBearerAuth(apiKey); // ← используем статический сервисный токен
+            headers.setBearerAuth(apiKey); // сервисный токен из конфига
 
             Map<String, Object> message = new HashMap<>();
             message.put("token", deviceToken);
@@ -134,6 +89,7 @@ public class RuStorePushService implements PushService {
             if (body != null) data.put("body", body);
             message.put("data", data);
 
+            // Показываем системное уведомление
             if (title != null && body != null) {
                 Map<String, String> notification = new HashMap<>();
                 notification.put("title", title);
@@ -148,17 +104,19 @@ public class RuStorePushService implements PushService {
             HttpEntity<String> request = new HttpEntity<>(jsonPayload, headers);
 
             ResponseEntity<String> response = restTemplate.exchange(
-                    url, HttpMethod.POST, request, String.class
-            );
+                    pushUrl, HttpMethod.POST, request, String.class);
 
             if (response.getStatusCode().is2xxSuccessful()) {
-                log.info("✅ RuStore Push успешно отправлен");
+                log.info("RuStore отправлен пользователю {}", userId);
+                return true;
             } else {
-                log.error("❌ RuStore Push ошибка: status={}, body={}",
+                log.error("RuStore ошибка: status={}, body={}",
                         response.getStatusCode().value(), response.getBody());
+                return false;
             }
         } catch (Exception e) {
-            log.error("❌ Ошибка отправки RuStore Push: {}", e.getMessage(), e);
+            log.error("RuStore исключение при отправке: {}", e.getMessage(), e);
+            return false;
         }
     }
 }

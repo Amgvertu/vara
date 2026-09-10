@@ -12,60 +12,86 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 public class FcmPushService implements PushService {
+
     private final FcmTokenService fcmTokenService;
 
     @Override
-    public void sendWakeUpNotification(UUID userId) {
+    public boolean sendWakeUpNotification(UUID userId) {
         List<String> tokens = fcmTokenService.getActiveTokensForUser(userId);
         if (tokens.isEmpty()) {
-            log.warn("No active FCM tokens for user {}", userId);
-            return;
+            log.warn("FCM: нет активных токенов у пользователя {}", userId);
+            return false;
         }
+        boolean atLeastOneSent = false;
         for (String token : tokens) {
             Message message = Message.builder()
                     .setToken(token)
                     .putData("type", "WAKE_UP")
+                    .setAndroidConfig(AndroidConfig.builder()
+                            .setPriority(AndroidConfig.Priority.HIGH)
+                            .build())
                     .build();
             try {
-                String response = FirebaseMessaging.getInstance().send(message);
-                log.info("Wake-up FCM sent to user {} (token: {}), response: {}", userId, token, response);
+                FirebaseMessaging.getInstance().send(message);
+                log.info("FCM WAKE_UP отправлен пользователю {}", userId);
+                atLeastOneSent = true;
             } catch (FirebaseMessagingException e) {
                 if (e.getMessagingErrorCode() == MessagingErrorCode.UNREGISTERED) {
-                    log.warn("FCM token unregistered: {}", token);
                     fcmTokenService.unregisterToken(userId, token);
                 } else {
-                    log.error("Failed to send FCM: {}", e.getMessage());
+                    log.error("FCM WAKE_UP ошибка: {}", e.getMessage());
                 }
             }
         }
+        return atLeastOneSent;
     }
 
     @Override
-    public void sendNotification(UUID userId, String title, String body) {
+    public boolean sendNotification(UUID userId, String title, String body) {
         List<String> tokens = fcmTokenService.getActiveTokensForUser(userId);
-        log.info("📱 Отправка FCM пользователю {}, токенов: {}", userId, tokens.size());
         if (tokens.isEmpty()) {
-            log.warn("⚠️ Нет активных FCM-токенов для {}", userId);
-            return;
+            log.warn("FCM: нет активных токенов у пользователя {}", userId);
+            return false;
         }
+
+        boolean atLeastOneSent = false;
+
         for (String token : tokens) {
+            // ВАЖНО: добавляем и notification, и data.
+            // notification — чтобы система показала уведомление на телефоне,
+            // data — чтобы приложение могло обработать событие (открыть нужный экран и т.д.).
             Message message = Message.builder()
                     .setToken(token)
+                    .setNotification(Notification.builder()
+                            .setTitle(title)
+                            .setBody(body)
+                            .build())
                     .putData("type", "REAL")
-                    .putData("title", title)
-                    .putData("body", body)
+                    .putData("title", title != null ? title : "")
+                    .putData("body", body != null ? body : "")
+                    .setAndroidConfig(AndroidConfig.builder()
+                            .setPriority(AndroidConfig.Priority.HIGH)
+                            .setNotification(AndroidNotification.builder()
+                                    .setChannelId("default")
+                                    .setClickAction("OPEN_APP")
+                                    .build())
+                            .build())
                     .build();
+
             try {
                 String response = FirebaseMessaging.getInstance().send(message);
-                log.info("✅ FCM отправлен {}, ответ: {}", userId, response);
+                log.info("FCM отправлен пользователю {}, ответ: {}", userId, response);
+                atLeastOneSent = true;
             } catch (FirebaseMessagingException e) {
                 if (e.getMessagingErrorCode() == MessagingErrorCode.UNREGISTERED) {
-                    log.warn("🔴 FCM токен недействителен: {}", token);
+                    log.warn("FCM токен недействителен, удаляем: {}", token);
                     fcmTokenService.unregisterToken(userId, token);
                 } else {
-                    log.error("❌ Ошибка FCM: {}", e.getMessage(), e);
+                    log.error("FCM ошибка: {}", e.getMessage());
                 }
             }
         }
+
+        return atLeastOneSent;
     }
 }
