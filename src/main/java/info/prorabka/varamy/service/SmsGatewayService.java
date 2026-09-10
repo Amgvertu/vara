@@ -142,7 +142,6 @@ public class SmsGatewayService {
     /**
      * Обработка ответа от шлюза.
      */
-    @MessageMapping("/sms-response")
     public void handleSmsResponse(SmsResponse response) {
         CompletableFuture<Boolean> future = pendingRequests.remove(response.getRequestId());
         if (future != null) {
