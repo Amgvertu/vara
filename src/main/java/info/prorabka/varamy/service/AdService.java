@@ -108,7 +108,14 @@ public class AdService {
         }
 
         adRepository.incrementViews(adId);
-        log.debug("incrementViews: adId={}, userId={}", adId, userId);
+
+        long newCount = (ad.getViewsCount() != null ? ad.getViewsCount() : 0L) + 1L;
+        ad.setViewsCount(newCount);
+
+        // Оповещаем всех клиентов через WebSocket
+        notificationService.sendAdViewsUpdated(ad.getId(), newCount);
+
+        log.debug("incrementViews: adId={}, userId={}, newCount={}", adId, userId, newCount);
     }
 
     // ============= МЕТОДЫ ДЛЯ АВТОРА =============

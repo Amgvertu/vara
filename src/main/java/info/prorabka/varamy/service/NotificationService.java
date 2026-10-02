@@ -569,6 +569,26 @@ public class NotificationService {
         log.info("AD_UPDATED sent for ad {} to /topic/ads and /topic/ad/{}/status", ad.getId(), ad.getId());
     }
 
+
+    /**
+     * Уведомляет всех клиентов об изменении счётчика просмотров объявления.
+     * Рассылается в общий топик /topic/ads (все клиенты) и в персональный
+     * /topic/ad/{id}/status (только подписчики этого объявления).
+     */
+    public void sendAdViewsUpdated(UUID adId, Long viewsCount) {
+        Map<String, Object> payload = Map.of(
+                "type", "AD_VIEWS_UPDATED",
+                "entityId", adId.toString(),
+                "payload", Map.of(
+                        "adId", adId.toString(),
+                        "viewsCount", viewsCount
+                )
+        );
+        messagingTemplate.convertAndSend("/topic/ads", payload);
+        messagingTemplate.convertAndSend("/topic/ad/" + adId + "/status", payload);
+        log.debug("AD_VIEWS_UPDATED sent for ad {}: views={}", adId, viewsCount);
+    }
+
     private String getAdDescription(Integer type, Integer subType) {
         if (type == null) {
             return "Новое объявление";
