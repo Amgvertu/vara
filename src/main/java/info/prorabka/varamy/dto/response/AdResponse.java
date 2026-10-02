@@ -55,4 +55,7 @@ public class AdResponse {
     @Schema(description = "Принято откликов нападающих")
     private Integer acceptedForwardsCount;
 
+    @Schema(description = "Количество просмотров объявления")
+    private Long viewsCount;
+
 }

@@ -96,6 +96,21 @@ public class AdService {
         return adMapper.toResponse(ad);
     }
 
+
+    @Transactional
+    public void incrementViews(UUID adId, UUID userId) {
+        Ad ad = adRepository.findById(adId)
+                .orElseThrow(() -> new ResourceNotFoundException("Объявление не найдено"));
+
+        // Автор не увеличивает счётчик своего объявления
+        if (userId != null && userId.equals(ad.getAuthor().getId())) {
+            return;
+        }
+
+        adRepository.incrementViews(adId);
+        log.debug("incrementViews: adId={}, userId={}", adId, userId);
+    }
+
     // ============= МЕТОДЫ ДЛЯ АВТОРА =============
 
     public Page<AdResponse> getMyAds(UUID userId, Pageable pageable) {

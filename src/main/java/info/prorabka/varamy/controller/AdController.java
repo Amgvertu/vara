@@ -131,6 +131,17 @@ public class AdController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
+    @PostMapping("/{id}/view")
+    @Operation(summary = "Увеличить счётчик просмотров объявления",
+            description = "Инкремент просмотра. Автор своего объявления не увеличивает счётчик. " +
+                    "Дедупликация (один просмотр за сессию) — на стороне клиента.")
+    public ResponseEntity<ApiResponse<Void>> incrementViews(
+            @AuthenticationPrincipal SecurityUser currentUser,
+            @PathVariable UUID id) {
+        adService.incrementViews(id, currentUser.getId());
+        return ResponseEntity.ok(ApiResponse.success("Просмотр учтён", null));
+    }
+
     @PutMapping("/{id}")
     @Operation(summary = "Редактирование объявления")
     public ResponseEntity<ApiResponse<AdResponse>> updateAd(

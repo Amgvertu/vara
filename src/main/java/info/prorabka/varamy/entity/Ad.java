@@ -107,4 +107,8 @@ public class Ad {
 
     @Column(name = "accepted_responses_count")
     private Integer acceptedResponsesCount = 0;
+
+    @Column(name = "views_count")
+    private Long viewsCount = 0L;
+
 }

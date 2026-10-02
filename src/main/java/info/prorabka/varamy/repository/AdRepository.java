@@ -103,6 +103,10 @@ public interface AdRepository extends JpaRepository<Ad, UUID>, JpaSpecificationE
             @Param("startTimePlus") LocalDateTime startTimePlus);
 
     @Modifying
+    @Query("UPDATE Ad a SET a.viewsCount = COALESCE(a.viewsCount, 0) + 1 WHERE a.id = :id")
+    int incrementViews(@Param("id") UUID id);
+
+    @Modifying
     @Query("DELETE FROM Ad a WHERE a.author = :author")
     void deleteByAuthor(@Param("author") User author);
 
